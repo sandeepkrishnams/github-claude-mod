@@ -1,27 +1,7 @@
 {
   "name": "accounts-band",
-  "version": "0.3.5",
+  "version": "0.4.0",
   "license": "MIT",
-  "description": "Shows the connected GitHub and Zoho Sprints accounts above the prompt, with one-click GitHub switching",
-  "types": "./types/index.d.ts",
-  "userConfig": {
-    "zohoTeamId": {
-      "type": "string",
-      "title": "Zoho Sprints team ID",
-      "description": "Workspace the band checks access to",
-      "default": ""
-    },
-    "zohoLabel": {
-      "type": "string",
-      "title": "Zoho workspace name",
-      "description": "Name shown in the band (the team ID when empty)",
-      "default": ""
-    },
-    "zohoServer": {
-      "type": "string",
-      "title": "Zoho Sprints server name",
-      "description": "Only if the band can't find the connector: its name in /mcp, or its connector ID in the desktop app",
-      "default": ""
-    }
-  }
+  "description": "Shows your GitHub accounts above the prompt and switches the active one in a click",
+  "types": "./types/index.d.ts"
 }
