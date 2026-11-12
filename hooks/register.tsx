@@ -22,20 +22,18 @@ const ZOHO_LOGO = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 10">$
   (c, i) => `<rect x="${i * 9}" y="1" width="7" height="8" rx="1.5" fill="${c}"/>`,
 ).join('')}</svg>`
 
-// Translucent fills and hairline borders give the glass look; surfaces draw no blur
+// Translucent fills give the glass look; surfaces draw no blur
 const GLASS = {
   band: 'rgba(255,255,255,0.04)',
-  bandBorder: 'rgba(255,255,255,0.14)',
-  chip: 'rgba(255,255,255,0.07)',
   chipBorder: 'rgba(255,255,255,0.16)',
   tip: 'rgba(22,27,34,0.92)',
 } as const
 
 const STATUS = {
-  active: { fill: 'rgba(46,160,67,0.18)', border: 'rgba(63,185,80,0.55)', dot: '#3FB950' },
-  ok: { fill: 'rgba(46,160,67,0.18)', border: 'rgba(63,185,80,0.55)', dot: '#3FB950' },
-  denied: { fill: 'rgba(248,81,73,0.16)', border: 'rgba(248,81,73,0.55)', dot: '#F85149' },
-  unknown: { fill: 'rgba(255,255,255,0.07)', border: 'rgba(255,255,255,0.16)', dot: '#8B949E' },
+  active: { fill: 'rgba(46,160,67,0.18)', dot: '#3FB950' },
+  ok: { fill: 'rgba(46,160,67,0.18)', dot: '#3FB950' },
+  denied: { fill: 'rgba(248,81,73,0.16)', dot: '#F85149' },
+  unknown: { fill: 'rgba(255,255,255,0.07)', dot: '#8B949E' },
 } as const
 
 // Names longer than this are cut, the full one shown on hover
@@ -118,12 +116,12 @@ export const register: Register = (on, options) => {
 
     // The terminal draws no Svg or translucency: glyphs and plain colours there
     const githubLogo = isGlass ? (
-      <table.Svg source={GITHUB_LOGO} alt="GitHub" width={13} height={13} />
+      <table.Svg source={GITHUB_LOGO} alt="GitHub" width={11} height={11} />
     ) : (
       <Text bold>◉</Text>
     )
     const zohoLogo = isGlass ? (
-      <table.Svg source={ZOHO_LOGO} alt="Zoho" width={22} height={7} />
+      <table.Svg source={ZOHO_LOGO} alt="Zoho" width={18} height={6} />
     ) : (
       <Box>
         {ZOHO_COLORS.map(c => (
@@ -165,9 +163,9 @@ export const register: Register = (on, options) => {
         flexDirection="row"
         alignItems="center"
         gap="xs"
-        paddingX={1}
+        paddingX="xs"
         {...(isGlass
-          ? { borderStyle: 'round', borderColor: tone.border, backgroundColor: tone.fill }
+          ? { backgroundColor: tone.fill }
           : {})}
       >
         <Text color={tone.dot}>●</Text>
@@ -184,11 +182,11 @@ export const register: Register = (on, options) => {
       <Box
         flexDirection="row"
         alignItems="center"
-        gap="sm"
-        paddingX={1}
+        gap="xs"
+        paddingX="xs"
         flexWrap="wrap"
         {...(isGlass
-          ? { borderStyle: 'round', borderColor: GLASS.bandBorder, backgroundColor: GLASS.band }
+          ? { backgroundColor: GLASS.band }
           : {})}
       >
         {githubLogo}
