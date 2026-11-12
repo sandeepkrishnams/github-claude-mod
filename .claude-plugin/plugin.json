@@ -1,6 +1,6 @@
 {
   "name": "accounts-band",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "license": "MIT",
   "description": "Shows the connected GitHub and Zoho Sprints accounts above the prompt, with one-click GitHub switching",
   "types": "./types/index.d.ts",

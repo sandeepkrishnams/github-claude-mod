@@ -32,7 +32,7 @@ const STATUS = {
 } as const
 
 // Names longer than this are cut, the full one shown on hover
-const MAX_NAME = 10
+const MAX_NAME = 18
 
 function shortName(name: string): string {
   return name.length > MAX_NAME ? `${name.slice(0, MAX_NAME - 1)}…` : name
@@ -171,46 +171,43 @@ export const register: Register = (on, options) => {
     )
 
     return (
-      <Box
-        flexDirection="row"
-        alignItems="center"
-        gap="xs"
-        paddingX="xs"
-        flexWrap="wrap"
-      >
-        {githubLogo}
-        {chip('gh-active', active ? STATUS.active : STATUS.unknown, active?.login ?? 'signed out')}
-        {accounts
-          .filter(a => !a.isActive)
-          .map(a =>
-            chip(
-              `gh-${a.login}`,
-              STATUS.unknown,
-              a.login,
-              <Button
-                key={`sw-${a.login}`}
-                label={`⇄ ${shortName(a.login)}`}
-                plain
-                dimColor
-                hover={{ dimColor: false }}
-                onPress={() => switchGithub($, a.login)}
-              />,
-            ),
+      <Box flexDirection="row" alignItems="center" justifyContent="space-between" width="100%" paddingX="xs">
+        <Box flexDirection="row" alignItems="center" gap="sm" flexWrap="wrap">
+          {githubLogo}
+          {chip('gh-active', active ? STATUS.active : STATUS.unknown, active?.login ?? 'signed out')}
+          {accounts
+            .filter(a => !a.isActive)
+            .map(a =>
+              chip(
+                `gh-${a.login}`,
+                STATUS.unknown,
+                a.login,
+                <Button
+                  key={`sw-${a.login}`}
+                  label={`⇄ ${shortName(a.login)}`}
+                  plain
+                  dimColor
+                  hover={{ dimColor: false }}
+                  onPress={() => switchGithub($, a.login)}
+                />,
+              ),
+            )}
+        </Box>
+        <Box flexDirection="row" alignItems="center" gap="sm">
+          {zohoLogo}
+          {chip(
+            'zoho',
+            STATUS[zohoStatus],
+            `${zohoName}${zohoMark}`,
+            <Button
+              key="zoho-check"
+              label={`${shortName(zohoName)}${zohoMark}`}
+              plain
+              onPress={() => recheckZoho($, teamId)}
+            />,
           )}
-        <Text dimColor>│</Text>
-        {zohoLogo}
-        {chip(
-          'zoho',
-          STATUS[zohoStatus],
-          `${zohoName}${zohoMark}`,
-          <Button
-            key="zoho-check"
-            label={`${shortName(zohoName)}${zohoMark}`}
-            plain
-            onPress={() => recheckZoho($, teamId)}
-          />,
-        )}
-        <Button key="hide" label="×" plain dimColor onPress={() => update($, isHidden, () => true)} />
+          <Button key="hide" label="×" plain dimColor onPress={() => update($, isHidden, () => true)} />
+        </Box>
       </Box>
     )
   })
