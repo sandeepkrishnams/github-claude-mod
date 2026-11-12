@@ -3,7 +3,7 @@
 A Claude Code mod that shows which GitHub and Zoho Sprints accounts are connected, in a band just above the prompt box.
 
 - **GitHub**: the active `gh` account in bold, plus a `↔ <login>` button for each other signed-in account. Clicking one runs `gh auth switch`.
-- **Zoho Sprints**: `✓` when the connected Zoho account can read your workspace, `✗ no access` when it can't. Clicking re-checks; to change the Zoho account, reconnect the connector in `/mcp` or claude.ai → Connectors.
+- **Zoho Sprints**: `✓` when the connected Zoho account can read your workspace, `✗ no access` when it can't. Clicking the name re-checks and shows the result; to change the Zoho account, reconnect the connector in `/mcp` or claude.ai → Connectors.
 - **Hide** turns the band off for the session.
 
 It refreshes when a session starts and after any `gh auth …` command.
@@ -32,6 +32,7 @@ In the plugin's config, set:
 
 - `zohoTeamId`: your Zoho Sprints workspace (team) ID
 - `zohoLabel`: the name to show for it
+- `zohoServer` (optional): only if clicking the Zoho name says the connector was not found; set it to the connector's name in `/mcp`, or its ID in the desktop app
 
 Needs the [GitHub CLI](https://cli.github.com/) and the Zoho Sprints connector.
 

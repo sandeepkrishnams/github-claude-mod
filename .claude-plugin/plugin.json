@@ -1,6 +1,6 @@
 {
   "name": "accounts-band",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "license": "MIT",
   "description": "Shows the connected GitHub and Zoho Sprints accounts above the prompt, with one-click GitHub switching",
   "types": "./types/index.d.ts",
@@ -15,6 +15,12 @@
       "type": "string",
       "title": "Zoho workspace name",
       "description": "Name shown in the band (the team ID when empty)",
+      "default": ""
+    },
+    "zohoServer": {
+      "type": "string",
+      "title": "Zoho Sprints server name",
+      "description": "Only if the band can't find the connector: its name in /mcp, or its connector ID in the desktop app",
       "default": ""
     }
   }

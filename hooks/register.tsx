@@ -7,7 +7,7 @@ const github = atom({ plugin: 'accounts-band', key: 'github' } as const, [] as G
 const zoho = atom({ plugin: 'accounts-band', key: 'zoho' } as const, 'unknown' as ZohoStatus)
 const isHidden = atom({ plugin: 'accounts-band', key: 'isHidden' } as const, false)
 
-const ZOHO_SERVER = 'claude.ai Zoho Sprints'
+const ZOHO_SERVERS = ['claude.ai Zoho Sprints', 'Zoho Sprints', 'claude_ai_Zoho_Sprints']
 const RECONNECT_HINT =
   'Zoho Sprints: switch accounts by reconnecting it in /mcp or claude.ai → Connectors'
 
@@ -51,16 +51,32 @@ async function loadGithub($: EngineInterface): Promise<void> {
 }
 
 // ponytail: the connector has no whoami tool, so access to the team stands in for identity
-async function checkZoho($: EngineInterface, teamId: string): Promise<void> {
+// The connector's server name differs by app (the desktop app uses its connector ID),
+// so each name is tried in turn. Returns why no name answered, or null.
+async function checkZoho(
+  $: EngineInterface,
+  teamId: string,
+  servers: readonly string[],
+): Promise<string | null> {
   if (!teamId) {
-    return
+    return 'set zohoTeamId in the plugin config'
   }
-  const { isError } = await $.mcp.call(ZOHO_SERVER, 'ZohoSprints_GetProjects', {
-    path_variables: { teamId },
-    query_params: { action: 'data', index: 1, range: 1 },
-    headers: { 'x-za-ui-version': 'v2', 'X-convert-response': 'true' },
-  })
-  await update($, zoho, () => (isError ? 'denied' : 'ok'))
+  let lastError = 'Zoho Sprints connector not found'
+  for (const server of servers) {
+    try {
+      const { isError } = await $.mcp.call(server, 'ZohoSprints_GetProjects', {
+        path_variables: { teamId },
+        query_params: { action: 'data', index: 1, range: 1 },
+        headers: { 'x-za-ui-version': 'v2', 'X-convert-response': 'true' },
+      })
+      await update($, zoho, () => (isError ? 'denied' : 'ok'))
+      return null
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error)
+    }
+  }
+  await update($, zoho, () => 'unknown')
+  return lastError
 }
 
 async function switchGithub($: EngineInterface, login: string): Promise<void> {
@@ -71,20 +87,30 @@ async function switchGithub($: EngineInterface, login: string): Promise<void> {
   await loadGithub($)
 }
 
-async function recheckZoho($: EngineInterface, teamId: string): Promise<void> {
-  await checkZoho($, teamId)
-  if ((await read($, zoho)) !== 'ok') {
-    $.ui.toast(RECONNECT_HINT)
+async function recheckZoho(
+  $: EngineInterface,
+  teamId: string,
+  servers: readonly string[],
+): Promise<void> {
+  $.ui.toast('Zoho: checking…')
+  const failure = await checkZoho($, teamId, servers)
+  const status = await read($, zoho)
+  if (failure !== null) {
+    $.ui.toast(`Zoho: ${failure}`)
+  } else {
+    $.ui.toast(status === 'ok' ? 'Zoho: connected, workspace reachable' : RECONNECT_HINT)
   }
 }
 
 export const register: Register = (on, options) => {
   const teamId = String(options.zohoTeamId ?? '')
   const zohoName = String(options.zohoLabel || teamId || 'set team ID in plugin config')
+  const custom = String(options.zohoServer ?? '')
+  const servers = custom ? [custom, ...ZOHO_SERVERS] : ZOHO_SERVERS
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    await Promise.allSettled([loadGithub($), checkZoho($, teamId)])
+    await Promise.allSettled([loadGithub($), checkZoho($, teamId, servers)])
     return result
   })
 
@@ -202,7 +228,7 @@ export const register: Register = (on, options) => {
             key="zoho-check"
             label={`${shortName(zohoName)}${zohoMark}`}
             plain
-            onPress={() => recheckZoho($, teamId)}
+            onPress={() => recheckZoho($, teamId, servers)}
           />,
         )}
         <Button key="hide" label="×" plain dimColor onPress={() => update($, isHidden, () => true)} />
