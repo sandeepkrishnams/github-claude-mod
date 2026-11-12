@@ -1,3 +1,7 @@
 .claude-plugin/types/
 .DS_Store
 *.log
+site/node_modules/
+site/dist/
+.agents/hooks.json
+.cursor/hooks.json
