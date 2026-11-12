@@ -22,13 +22,28 @@ const ZOHO_LOGO = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 10">$
   (c, i) => `<rect x="${i * 9}" y="1" width="7" height="8" rx="1.5" fill="${c}"/>`,
 ).join('')}</svg>`
 
-const CHIP = {
-  github: '#24292F',
-  active: '#1F883D',
-  ok: '#1F883D',
-  denied: '#CF222E',
-  unknown: '#6E7781',
+// Translucent fills and hairline borders give the glass look; surfaces draw no blur
+const GLASS = {
+  band: 'rgba(255,255,255,0.04)',
+  bandBorder: 'rgba(255,255,255,0.14)',
+  chip: 'rgba(255,255,255,0.07)',
+  chipBorder: 'rgba(255,255,255,0.16)',
+  tip: 'rgba(22,27,34,0.92)',
 } as const
+
+const STATUS = {
+  active: { fill: 'rgba(46,160,67,0.18)', border: 'rgba(63,185,80,0.55)', dot: '#3FB950' },
+  ok: { fill: 'rgba(46,160,67,0.18)', border: 'rgba(63,185,80,0.55)', dot: '#3FB950' },
+  denied: { fill: 'rgba(248,81,73,0.16)', border: 'rgba(248,81,73,0.55)', dot: '#F85149' },
+  unknown: { fill: 'rgba(255,255,255,0.07)', border: 'rgba(255,255,255,0.16)', dot: '#8B949E' },
+} as const
+
+// Names longer than this are cut, the full one shown on hover
+const MAX_NAME = 10
+
+function shortName(name: string): string {
+  return name.length > MAX_NAME ? `${name.slice(0, MAX_NAME - 1)}…` : name
+}
 
 async function loadGithub($: EngineInterface): Promise<void> {
   const { exitCode, stdout } = await $.process.run(['gh', 'auth', 'status', '--json', 'hosts'])
@@ -97,63 +112,118 @@ export const register: Register = (on, options) => {
     const zohoStatus = await read($, zoho)
     const table = $.ui.resolve(e)
     const { Box, Button, Text } = table
+    const isGlass = 'Svg' in table
     const active = accounts.find(a => a.isActive)
-    const zohoMark = { ok: '✓', denied: '✗ no access', unknown: '…' }[zohoStatus]
+    const zohoMark = { ok: '', denied: ' ✗', unknown: ' …' }[zohoStatus]
 
-    // The terminal has no Svg: it gets coloured glyphs in place of the logos
-    const githubLogo =
-      'Svg' in table ? (
-        <table.Svg source={GITHUB_LOGO} alt="GitHub" width={14} height={14} />
-      ) : (
-        <Text color="#FFFFFF" bold>
-          ◉
-        </Text>
-      )
-    const zohoLogo =
-      'Svg' in table ? (
-        <table.Svg source={ZOHO_LOGO} alt="Zoho" width={30} height={10} />
-      ) : (
-        <Box>
-          {ZOHO_COLORS.map(c => (
-            <Text key={c} color={c}>
-              ■
-            </Text>
-          ))}
+    // The terminal draws no Svg or translucency: glyphs and plain colours there
+    const githubLogo = isGlass ? (
+      <table.Svg source={GITHUB_LOGO} alt="GitHub" width={13} height={13} />
+    ) : (
+      <Text bold>◉</Text>
+    )
+    const zohoLogo = isGlass ? (
+      <table.Svg source={ZOHO_LOGO} alt="Zoho" width={22} height={7} />
+    ) : (
+      <Box>
+        {ZOHO_COLORS.map(c => (
+          <Text key={c} color={c}>
+            ■
+          </Text>
+        ))}
+      </Box>
+    )
+
+    const tip = (text: string) =>
+      isGlass && text.length > MAX_NAME ? (
+        <Box
+          position="absolute"
+          top={-26}
+          left={0}
+          display="none"
+          hover={{ display: 'flex' }}
+          backgroundColor={GLASS.tip}
+          borderStyle="round"
+          borderColor={GLASS.chipBorder}
+          paddingX={1}
+        >
+          <Text size="caption" mono>
+            {text}
+          </Text>
         </Box>
-      )
+      ) : null
+
+    const chip = (
+      key: string,
+      tone: (typeof STATUS)[keyof typeof STATUS],
+      label: string,
+      body: ReturnType<typeof Text> | null = null,
+    ) => (
+      <Box
+        key={key}
+        position="relative"
+        flexDirection="row"
+        alignItems="center"
+        gap="xs"
+        paddingX={1}
+        {...(isGlass
+          ? { borderStyle: 'round', borderColor: tone.border, backgroundColor: tone.fill }
+          : {})}
+      >
+        <Text color={tone.dot}>●</Text>
+        {body ?? (
+          <Text size="caption" mono weight="medium">
+            {shortName(label)}
+          </Text>
+        )}
+        {tip(label)}
+      </Box>
+    )
 
     return (
-      <Box flexDirection="row" alignItems="center" gap={1} flexWrap="wrap">
-        <Box backgroundColor={CHIP.github} paddingX={1} gap={1} alignItems="center">
-          {githubLogo}
-          <Text color="#FFFFFF" bold>
-            GitHub
-          </Text>
-        </Box>
-        <Box backgroundColor={active ? CHIP.active : CHIP.unknown} paddingX={1}>
-          <Text color="#FFFFFF" bold>
-            ● {active?.login ?? 'not signed in'}
-          </Text>
-        </Box>
+      <Box
+        flexDirection="row"
+        alignItems="center"
+        gap="sm"
+        paddingX={1}
+        flexWrap="wrap"
+        {...(isGlass
+          ? { borderStyle: 'round', borderColor: GLASS.bandBorder, backgroundColor: GLASS.band }
+          : {})}
+      >
+        {githubLogo}
+        {chip('gh-active', active ? STATUS.active : STATUS.unknown, active?.login ?? 'signed out')}
         {accounts
           .filter(a => !a.isActive)
-          .map(a => (
-            <Button
-              key={`gh-${a.login}`}
-              label={`⇄ ${a.login}`}
-              variant="secondary"
-              onPress={() => switchGithub($, a.login)}
-            />
-          ))}
+          .map(a =>
+            chip(
+              `gh-${a.login}`,
+              STATUS.unknown,
+              a.login,
+              <Button
+                key={`sw-${a.login}`}
+                label={`⇄ ${shortName(a.login)}`}
+                plain
+                dimColor
+                hover={{ dimColor: false }}
+                onPress={() => switchGithub($, a.login)}
+              />,
+            ),
+          )}
         <Text dimColor>│</Text>
         {zohoLogo}
-        <Box backgroundColor={CHIP[zohoStatus]} paddingX={1}>
-          <Text color="#FFFFFF" bold>
-            {zohoName} {zohoMark}
-          </Text>
-        </Box>
-        <Button key="zoho" label="↻" variant="secondary" onPress={() => recheckZoho($, teamId)} />
-        <Button key="hide" label="Hide" plain dimColor onPress={() => update($, isHidden, () => true)} />
+        {chip(
+          'zoho',
+          STATUS[zohoStatus],
+          `${zohoName}${zohoMark}`,
+          <Button
+            key="zoho-check"
+            label={`${shortName(zohoName)}${zohoMark}`}
+            plain
+            onPress={() => recheckZoho($, teamId)}
+          />,
+        )}
+        <Button key="hide" label="×" plain dimColor onPress={() => update($, isHidden, () => true)} />
       </Box>
     )
   })
