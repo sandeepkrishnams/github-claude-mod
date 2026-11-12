@@ -5,7 +5,8 @@ import type { Access, GhAccount, RepoState } from '../types'
 
 const github = atom({ plugin: 'accounts-band', key: 'github' } as const, [] as GhAccount[])
 const isHidden = atom({ plugin: 'accounts-band', key: 'isHidden' } as const, false)
-const repos = atom({ plugin: 'accounts-band', key: 'repos' } as const, {} as Record<string, RepoState>)
+// Keyed apart from the old 'repos' list: $.state outlives a reload, so a renamed shape needs a new key
+const repos = atom({ plugin: 'accounts-band', key: 'repoStates' } as const, {} as Record<string, RepoState>)
 const access = atom({ plugin: 'accounts-band', key: 'access' } as const, {} as Access)
 const isExpanded = atom({ plugin: 'accounts-band', key: 'isExpanded' } as const, false)
 const isLoading = atom({ plugin: 'accounts-band', key: 'isLoading' } as const, false)
@@ -219,6 +220,8 @@ async function switchBranch($: EngineInterface, repo: RepoState, ref: string): P
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    // A reload also starts here: show the band again even if it was closed before
+    await update($, isHidden, () => false)
     await refreshAll($).catch((error: unknown) => $.ui.toast(`accounts-band: ${String(error)}`))
     return result
   })
@@ -380,5 +383,5 @@ export const register: Register = on => {
         )}
       </Box>
     )
-  })
+  }).catch(($, e, next) => next(e))
 }

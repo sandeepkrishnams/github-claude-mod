@@ -22,7 +22,7 @@ declare module 'claude-code' {
       github: GhAccount[]
       isHidden: boolean
       // repo path -> its state, in the order found
-      repos: Record<string, RepoState>
+      repoStates: Record<string, RepoState>
       access: Access
       isExpanded: boolean
       isLoading: boolean
