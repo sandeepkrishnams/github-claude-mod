@@ -21,11 +21,11 @@ declare module 'claude-code' {
     'accounts-band': {
       github: GhAccount[]
       isHidden: boolean
-      repos: string[]
-      selected: string | null
-      info: RepoState | null
+      // repo path -> its state, in the order found
+      repos: Record<string, RepoState>
       access: Access
       isExpanded: boolean
+      isLoading: boolean
     }
   }
 }

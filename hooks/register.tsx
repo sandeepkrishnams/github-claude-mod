@@ -5,11 +5,10 @@ import type { Access, GhAccount, RepoState } from '../types'
 
 const github = atom({ plugin: 'accounts-band', key: 'github' } as const, [] as GhAccount[])
 const isHidden = atom({ plugin: 'accounts-band', key: 'isHidden' } as const, false)
-const repos = atom({ plugin: 'accounts-band', key: 'repos' } as const, [] as string[])
-const selected = atom({ plugin: 'accounts-band', key: 'selected' } as const, null as string | null)
-const info = atom({ plugin: 'accounts-band', key: 'info' } as const, null as RepoState | null)
+const repos = atom({ plugin: 'accounts-band', key: 'repos' } as const, {} as Record<string, RepoState>)
 const access = atom({ plugin: 'accounts-band', key: 'access' } as const, {} as Access)
 const isExpanded = atom({ plugin: 'accounts-band', key: 'isExpanded' } as const, false)
+const isLoading = atom({ plugin: 'accounts-band', key: 'isLoading' } as const, false)
 
 type Gh = { hosts: Record<string, { login: string; active: boolean }[]> }
 type Run = { ok: boolean; out: string; err: string }
@@ -28,12 +27,15 @@ function shortName(name: string): string {
   return name.length > MAX_NAME ? `${name.slice(0, MAX_NAME - 1)}…` : name
 }
 
-function levelOf(levels: Access, slug: string, login: string): 'read' | 'push' | null {
-  return levels[slug]?.[login] ?? null
-}
-
 function baseName(path: string): string {
   return path.split('/').filter(Boolean).pop() ?? path
+}
+
+// Whether the active account may see a repo: yes without a GitHub remote, and yes until
+// its access is known, so the band never hides a repo it has not checked
+function isVisible(repo: RepoState, levels: Access, active: string): boolean {
+  const slug = repo.slugs[0]
+  return slug === undefined || levels[slug] === undefined || levels[slug]?.[active] !== undefined
 }
 
 async function sh(
@@ -61,30 +63,7 @@ async function loadGithub($: EngineInterface): Promise<void> {
   await update($, github, () => accounts)
 }
 
-// The repo the session runs in, then any separate repos nested up to 3 levels below
-async function discoverRepos($: EngineInterface): Promise<void> {
-  const cwd = await $.session.cwd()
-  const [top, nested] = await Promise.all([
-    sh($, ['git', 'rev-parse', '--show-toplevel'], cwd),
-    sh($, ['find', cwd, '-maxdepth', '3', '-name', 'node_modules', '-prune', '-o', '-name', '.git', '-print']),
-  ])
-  const found = nested.out
-    .split('\n')
-    .filter(Boolean)
-    .map(p => p.replace(/\/\.git$/, ''))
-  const list = [...new Set([...(top.ok ? [top.out] : []), ...found])]
-  await update($, repos, () => list)
-  await update($, selected, current =>
-    current !== null && list.includes(current) ? current : (list[0] ?? null),
-  )
-}
-
-async function loadRepo($: EngineInterface): Promise<void> {
-  const path = await read($, selected)
-  if (path === null) {
-    await update($, info, () => null)
-    return
-  }
+async function readRepo($: EngineInterface, path: string): Promise<RepoState> {
   const git = (...args: string[]) => sh($, ['git', ...args], path)
   const [branch, sha, ab, status, remotesRaw, refs] = await Promise.all([
     git('branch', '--show-current'),
@@ -100,8 +79,7 @@ async function loadRepo($: EngineInterface): Promise<void> {
     ...new Set(fetchLines.flatMap(line => GITHUB_SLUG.exec(line.split(/\s+/)[1] ?? '')?.[1] ?? [])),
   ]
   const [behind = 0, ahead = 0] = ab.ok ? ab.out.split(/\s+/).map(Number) : []
-
-  await update($, info, () => ({
+  return {
     path,
     branch: branch.out || sha.out,
     hasUpstream: ab.ok,
@@ -113,14 +91,39 @@ async function loadRepo($: EngineInterface): Promise<void> {
     branches: refs.out
       .split('\n')
       .filter(ref => ref && !remoteNames.includes(ref) && !ref.endsWith('/HEAD')),
-  }))
+  }
 }
 
-// How each signed-in account can reach each GitHub remote of the selected repo
+// The repo the session runs in, then every separate repo nested up to 3 levels below
+async function loadRepos($: EngineInterface): Promise<void> {
+  const cwd = await $.session.cwd()
+  const [top, nested] = await Promise.all([
+    sh($, ['git', 'rev-parse', '--show-toplevel'], cwd),
+    sh($, ['find', cwd, '-maxdepth', '3', '-name', 'node_modules', '-prune', '-o', '-name', '.git', '-print']),
+  ])
+  const paths = [
+    ...new Set([
+      ...(top.ok ? [top.out] : []),
+      ...nested.out
+        .split('\n')
+        .filter(Boolean)
+        .map(p => p.replace(/\/\.git$/, '')),
+    ]),
+  ]
+  const states = await Promise.all(paths.map(path => readRepo($, path)))
+  await update($, repos, () => Object.fromEntries(states.map(s => [s.path, s])))
+}
+
+async function reloadRepo($: EngineInterface, path: string): Promise<void> {
+  const state = await readRepo($, path)
+  await update($, repos, current => ({ ...current, [path]: state }))
+}
+
+// How each signed-in account can reach each GitHub remote of the project's repos
 async function checkAccess($: EngineInterface): Promise<void> {
-  const slugs = (await read($, info))?.slugs ?? []
+  const slugs = [...new Set(Object.values(await read($, repos)).flatMap(r => r.slugs))]
   const accounts = await read($, github)
-  const result: Access = {}
+  const result: Access = Object.fromEntries(slugs.map(slug => [slug, {}]))
   await Promise.all(
     accounts.map(async ({ login }) => {
       const token = await sh($, ['gh', 'auth', 'token', '--user', login])
@@ -140,31 +143,25 @@ async function checkAccess($: EngineInterface): Promise<void> {
   await update($, access, () => result)
 }
 
-async function switchGithub(
-  $: EngineInterface,
-  login: string,
-  rememberFor: string | null,
-): Promise<boolean> {
+async function switchGithub($: EngineInterface, login: string, isRemembered: boolean): Promise<void> {
   const r = await sh($, ['gh', 'auth', 'switch', '--hostname', 'github.com', '--user', login])
   $.ui.toast(r.ok ? `GitHub: switched to ${login}` : `gh: ${r.err}`)
-  if (r.ok && rememberFor !== null) {
-    await $.store.set(`account:${rememberFor}`, login)
+  if (r.ok && isRemembered) {
+    await $.store.set(`account:${await $.session.cwd()}`, login)
   }
   await loadGithub($)
-  return r.ok
 }
 
-// The account remembered for this repo if it can still read it; else, when the active
-// account cannot push, the first that can push, then the first that can read
+// The account remembered for this project if it can still read its repos; else, when the
+// active account cannot push to the first GitHub repo, the first that can, then one that reads
 async function autoPickAccount($: EngineInterface): Promise<void> {
-  const repo = await read($, info)
-  const slug = repo?.slugs[0]
-  if (repo === null || slug === undefined) {
+  const slug = Object.values(await read($, repos)).find(r => r.slugs.length)?.slugs[0]
+  if (slug === undefined) {
     return
   }
   const levels = (await read($, access))[slug] ?? {}
   const active = (await read($, github)).find(a => a.isActive)?.login ?? ''
-  const remembered = await $.store.get(`account:${repo.path}`)
+  const remembered = await $.store.get(`account:${await $.session.cwd()}`)
   const logins = Object.keys(levels)
   const target =
     typeof remembered === 'string' && remembered in levels
@@ -173,64 +170,50 @@ async function autoPickAccount($: EngineInterface): Promise<void> {
         ? (logins.find(l => levels[l] === 'push') ?? (levels[active] ? undefined : logins[0]))
         : undefined
   if (target !== undefined && target !== active) {
-    await switchGithub($, target, null)
+    await switchGithub($, target, false)
   }
-}
-
-async function loadRepoWithAccess($: EngineInterface): Promise<void> {
-  await loadRepo($)
-  await checkAccess($)
-  await autoPickAccount($)
 }
 
 async function refreshAll($: EngineInterface): Promise<void> {
-  await Promise.all([loadGithub($), discoverRepos($)])
-  await loadRepoWithAccess($)
-}
-
-async function selectRepo($: EngineInterface, path: string): Promise<void> {
-  await update($, selected, () => path)
-  await loadRepoWithAccess($)
-}
-
-async function gitAction($: EngineInterface, args: string[], done: string): Promise<void> {
-  const repo = await read($, info)
-  if (repo === null) {
-    return
+  await update($, isLoading, () => true)
+  try {
+    await Promise.all([loadGithub($), loadRepos($)])
+    await checkAccess($)
+    await autoPickAccount($)
+  } finally {
+    await update($, isLoading, () => false)
   }
-  $.ui.toast(`git ${args[0]}…`)
-  const r = await sh($, ['git', ...args], repo.path)
-  $.ui.toast(r.ok ? done : `git: ${r.err.split('\n').pop()}`)
-  await loadRepo($)
 }
 
-async function push($: EngineInterface): Promise<void> {
-  const repo = await read($, info)
-  if (repo === null) {
-    return
-  }
+async function gitAction($: EngineInterface, path: string, args: string[], done: string): Promise<void> {
+  $.ui.toast(`${baseName(path)}: git ${args[0]}…`)
+  const r = await sh($, ['git', ...args], path)
+  $.ui.toast(r.ok ? `${baseName(path)}: ${done}` : `${baseName(path)}: ${r.err.split('\n').pop()}`)
+  await reloadRepo($, path)
+}
+
+async function push($: EngineInterface, repo: RepoState): Promise<void> {
   // A branch with no upstream yet is published to the first remote under its own name
   const args =
     repo.hasUpstream || repo.remoteNames[0] === undefined
       ? ['push']
       : ['push', '-u', repo.remoteNames[0], 'HEAD']
-  await gitAction($, args, 'Pushed')
+  await gitAction($, repo.path, args, 'pushed')
 }
 
-async function switchBranch($: EngineInterface, ref: string): Promise<void> {
-  const repo = await read($, info)
-  if (repo === null || ref === repo.branch) {
+async function switchBranch($: EngineInterface, repo: RepoState, ref: string): Promise<void> {
+  if (ref === repo.branch) {
     return
   }
   if (repo.dirty > 0) {
     $.ui.toast(`Not switching: ${repo.dirty} uncommitted file(s) in ${baseName(repo.path)}`)
-    await loadRepo($)
+    await reloadRepo($, repo.path)
     return
   }
   // A remote branch (origin/x) is checked out as a local tracking branch x
   const remote = repo.remoteNames.find(name => ref.startsWith(`${name}/`))
   const name = remote ? ref.slice(remote.length + 1) : ref
-  await gitAction($, ['switch', name], `Switched to ${name}`)
+  await gitAction($, repo.path, ['switch', name], `switched to ${name}`)
 }
 
 export const register: Register = on => {
@@ -246,7 +229,7 @@ export const register: Register = on => {
       await loadGithub($)
     }
     if (/\bgit\b/.test(e.command)) {
-      await loadRepo($)
+      await Promise.all(Object.keys(await read($, repos)).map(path => reloadRepo($, path)))
     }
     return ran
   }).catch(($, e, next) => next(e))
@@ -257,19 +240,16 @@ export const register: Register = on => {
     }
 
     const accounts = await read($, github)
-    const repo = await read($, info)
-    const repoList = await read($, repos)
     const levels = await read($, access)
     const expanded = await read($, isExpanded)
+    const loading = await read($, isLoading)
     const table = $.ui.resolve(e)
     const { Box, Button, Text } = table
     const hasSvg = 'Svg' in table
     const active = accounts.find(a => a.isActive)
-    const mainSlug = repo?.slugs[0] ?? null
-    const levelFor = (login: string) => (mainSlug ? levelOf(levels, mainSlug, login) : null)
-    const activeLevel = active ? levelFor(active.login) : null
-    // A repo shows only to an account that can read it (or when it has no GitHub remote)
-    const shown = repo !== null && (mainSlug === null || activeLevel !== null) ? repo : null
+    const visible = Object.values(await read($, repos)).filter(r =>
+      isVisible(r, levels, active?.login ?? ''),
+    )
 
     // The terminal draws no Svg: a glyph stands in for the logo there
     const githubLogo = hasSvg ? (
@@ -308,16 +288,28 @@ export const register: Register = on => {
         </Box>
       </Box>
     )
+    const counts = (repo: RepoState) =>
+      [repo.ahead ? `↑${repo.ahead}` : '', repo.behind ? `↓${repo.behind}` : '', repo.dirty ? `●${repo.dirty}` : '']
+        .filter(Boolean)
+        .join(' ')
 
-    const summary = shown
-      ? [
-          shown.ahead ? `↑${shown.ahead}` : '',
-          shown.behind ? `↓${shown.behind}` : '',
-          shown.dirty ? `●${shown.dirty}` : '',
-        ]
-          .filter(Boolean)
-          .join(' ')
-      : ''
+    const first = visible[0]
+    const where =
+      visible.length === 1 && first ? (
+        <Box flexDirection="row" alignItems="center" gap="sm">
+          {text(baseName(first.path), undefined, true)}
+          {text(`⎇ ${shortName(first.branch)}`)}
+          {counts(first) ? text(counts(first), first.dirty ? DOT.warn : undefined, !first.dirty) : null}
+        </Box>
+      ) : visible.length > 1 ? (
+        text(
+          `${visible.length} repos${visible.some(r => r.dirty) ? ` · ${visible.filter(r => r.dirty).length} with changes` : ''}`,
+          undefined,
+          true,
+        )
+      ) : (
+        text(loading ? 'looking for repos…' : 'no git repo here', undefined, true)
+      )
 
     // Collapsed: who you are, where you are, and whether anything needs a look
     const headline = (
@@ -327,14 +319,9 @@ export const register: Register = on => {
           {dot(active ? DOT.active : DOT.idle)}
           {text(shortName(active?.login ?? 'signed out'))}
         </Box>
-        {shown ? (
-          <Box flexDirection="row" alignItems="center" gap="sm">
-            {text(baseName(shown.path), undefined, true)}
-            {text(`⎇ ${shortName(shown.branch)}`)}
-            {summary ? text(summary, shown.dirty ? DOT.warn : undefined, !shown.dirty) : null}
-          </Box>
-        ) : null}
+        {where}
         <Box flexDirection="row" alignItems="center" gap="sm">
+          {iconAction('refresh', '↻', 'refresh', () => refreshAll($))}
           {action('toggle', expanded ? '▾ less' : '▸ more', () => update($, isExpanded, value => !value))}
           {action('hide', '×', () => update($, isHidden, () => true))}
         </Box>
@@ -347,58 +334,50 @@ export const register: Register = on => {
 
     // Expanded: one labelled line per topic, the label column lined up
     const { Select } = table
+    const labelWidth = Math.max(8, ...visible.map(r => baseName(r.path).length + 1))
     const section = (key: string, title: string, children: RenderChildren[]) => (
       <Box key={key} flexDirection="row" alignItems="center" gap="md" width="100%">
-        {text(title.padEnd(8), undefined, true)}
+        {text(title.padEnd(labelWidth), undefined, true)}
         <Box flexDirection="row" alignItems="center" gap="md" flexGrow={1}>
           {children}
         </Box>
       </Box>
     )
-
-    const accountLine = section('accounts', 'Account', [
-      text(`${active?.login ?? 'signed out'}${activeLevel === 'read' ? ' (read only)' : ''}`),
-      ...accounts
-        .filter(a => !a.isActive)
-        .map(a =>
-          action(
-            `sw-${a.login}`,
-            `⇄ ${shortName(a.login)}${levelFor(a.login) ? ' ●' : ''}`,
-            () => switchGithub($, a.login, shown?.path ?? null),
-          ),
-        ),
-    ])
+    const reachesAny = (login: string) =>
+      visible.some(r => r.slugs[0] !== undefined && levels[r.slugs[0]]?.[login] !== undefined)
 
     return (
       <Box flexDirection="column" width="100%" gap="xs">
         {headline}
-        {accountLine}
-        {shown && repoList.length > 1
-          ? section('repo', 'Repo', [
-              <Select
-                key="repo"
-                value={shown.path}
-                options={repoList.map(p => ({ value: p, label: baseName(p) }))}
-                onSelect={p => selectRepo($, p)}
-              />,
-            ])
-          : null}
-        {shown
-          ? section('branch', 'Branch', [
-              <Select
-                key="branch"
-                value={shown.branch}
-                options={(shown.branches.includes(shown.branch)
-                  ? shown.branches
-                  : [shown.branch, ...shown.branches]
-                ).map(b => ({ value: b }))}
-                onSelect={b => switchBranch($, b)}
-              />,
-              iconAction('fetch', '⟳', 'fetch', () => gitAction($, ['fetch', '--all', '--prune'], 'Fetched')),
-              iconAction('pull', '⇣', 'pull', () => gitAction($, ['pull', '--ff-only'], 'Pulled')),
-              iconAction('push', '⇡', 'push', () => push($)),
-            ])
-          : null}
+        {section('accounts', 'Account', [
+          text(active?.login ?? 'signed out'),
+          ...accounts
+            .filter(a => !a.isActive)
+            .map(a =>
+              action(`sw-${a.login}`, `⇄ ${shortName(a.login)}${reachesAny(a.login) ? ' ●' : ''}`, () =>
+                switchGithub($, a.login, true),
+              ),
+            ),
+        ])}
+        {visible.map(repo =>
+          section(`repo-${repo.path}`, baseName(repo.path), [
+            <Select
+              key={`branch-${repo.path}`}
+              label="⎇"
+              value={repo.branch}
+              options={(repo.branches.includes(repo.branch) ? repo.branches : [repo.branch, ...repo.branches]).map(
+                b => ({ value: b }),
+              )}
+              onSelect={b => switchBranch($, repo, b)}
+            />,
+            counts(repo) ? text(counts(repo), repo.dirty ? DOT.warn : undefined, !repo.dirty) : null,
+            iconAction(`fetch-${repo.path}`, '⟳', 'fetch', () =>
+              gitAction($, repo.path, ['fetch', '--all', '--prune'], 'fetched'),
+            ),
+            iconAction(`pull-${repo.path}`, '⇣', 'pull', () => gitAction($, repo.path, ['pull', '--ff-only'], 'pulled')),
+            iconAction(`push-${repo.path}`, '⇡', 'push', () => push($, repo)),
+          ]),
+        )}
       </Box>
     )
   })
