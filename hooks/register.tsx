@@ -186,6 +186,14 @@ async function refreshAll($: EngineInterface): Promise<void> {
   }
 }
 
+async function syncAll($: EngineInterface, path: string | undefined): Promise<void> {
+  if (path !== undefined) {
+    const r = await sh($, ['git', 'fetch', '--all', '--prune'], path)
+    $.ui.toast(r.ok ? `${baseName(path)}: fetched` : `${baseName(path)}: ${r.err.split('\n').pop()}`)
+  }
+  await refreshAll($)
+}
+
 async function gitAction($: EngineInterface, path: string, args: string[], done: string): Promise<void> {
   $.ui.toast(`${baseName(path)}: git ${args[0]}…`)
   const r = await sh($, ['git', ...args], path)
@@ -298,11 +306,6 @@ export const register: Register = on => {
         {value}
       </Text>
     )
-    const divider = (key: string) => (
-      <Text key={key} dimColor>
-        │
-      </Text>
-    )
 
     const account =
       hasPickers && accounts.length > 1 ? (
@@ -342,22 +345,22 @@ export const register: Register = on => {
     }
 
     // One quiet row: account and repo tabs on the left; the current repo's branch and
-    // actions, then refresh and close, on the right
+    // actions, then close, pushed to the right
     return (
-      <Box key="band" flexDirection="row" alignItems="center" justifyContent="space-between" width="100%" paddingX="sm">
-        <Box key="left" flexDirection="row" alignItems="center" gap="md">
+      <Box key="band" flexDirection="row" alignItems="center" width="100%">
+        <Box key="left" flexDirection="row" alignItems="center" gap="sm">
           <Box key="who" flexDirection="row" alignItems="center" gap="xs">
             {githubLogo}
             {account}
           </Box>
-          {divider('left-divider')}
           {visible.length
             ? visible.map(tab)
             : quiet(loading ? 'looking for repos…' : 'no git repo here')}
         </Box>
-        <Box key="right" flexDirection="row" alignItems="center" gap="md">
+        <Box key="spacer" flexGrow={1} />
+        <Box key="right" flexDirection="row" alignItems="center" gap="xs">
           {current ? (
-            <Box key="branch" flexDirection="row" alignItems="center" gap="sm">
+            <Box key="branch" flexDirection="row" alignItems="center" gap="xs">
               {quiet('⎇')}
               {hasPickers ? (
                 <table.Select
@@ -372,17 +375,15 @@ export const register: Register = on => {
               ) : (
                 quiet(shortName(current.branch))
               )}
-              {iconAction(`fetch-${current.path}`, '⟳', 'fetch', () =>
-                gitAction($, current.path, ['fetch', '--all', '--prune'], 'fetched'),
-              )}
               {iconAction(`pull-${current.path}`, '⇣', 'pull', () =>
                 gitAction($, current.path, ['pull', '--ff-only'], 'pulled'),
               )}
               {iconAction(`push-${current.path}`, '⇡', 'push', () => push($, current))}
             </Box>
           ) : null}
-          {current ? divider('right-divider') : null}
-          {iconAction('refresh', '↻', 'refresh', () => refreshAll($))}
+          {/* The one refresh: fetches every remote of the current repo, then re-reads
+              accounts and repos; with no repo it only re-reads */}
+          {iconAction('sync', '⟳', current ? 'fetch & refresh' : 'refresh', () => syncAll($, current?.path))}
           {action('hide', '×', () => update($, isHidden, () => true))}
         </Box>
       </Box>
