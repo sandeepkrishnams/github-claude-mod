@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { Access, Ci, Creating, GhAccount, Pr, Remote, RepoState, Worktree } from '../types'
+import type { Access, GhAccount, RepoState } from '../types'
 
 const github = atom({ plugin: 'accounts-band', key: 'github' } as const, [] as GhAccount[])
 const isHidden = atom({ plugin: 'accounts-band', key: 'isHidden' } as const, false)
@@ -9,21 +9,17 @@ const repos = atom({ plugin: 'accounts-band', key: 'repos' } as const, [] as str
 const selected = atom({ plugin: 'accounts-band', key: 'selected' } as const, null as string | null)
 const info = atom({ plugin: 'accounts-band', key: 'info' } as const, null as RepoState | null)
 const access = atom({ plugin: 'accounts-band', key: 'access' } as const, {} as Access)
-const creating = atom({ plugin: 'accounts-band', key: 'creating' } as const, null as Creating)
 const isExpanded = atom({ plugin: 'accounts-band', key: 'isExpanded' } as const, false)
 
 type Gh = { hosts: Record<string, { login: string; active: boolean }[]> }
 type Run = { ok: boolean; out: string; err: string }
-type Check = { status?: string; conclusion?: string; state?: string }
 
 const GITHUB_LOGO =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#8B949E" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>'
 
-const DOT = { active: '#3FB950', idle: '#8B949E', warn: '#D29922', fail: '#F85149' } as const
-const CI_DOT: Record<Ci, string> = { pass: DOT.active, fail: DOT.fail, running: DOT.warn, none: DOT.idle }
+const DOT = { active: '#3FB950', idle: '#8B949E', warn: '#D29922' } as const
+const TIP = { fill: '#161B22', border: '#30363D', text: '#E6EDF3' } as const
 const GITHUB_SLUG = /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?$/
-// Bash commands after which the GitHub side (PRs, CI) is worth fetching again
-const GITHUB_CHANGING = /\bgh\b|\bgit\s+(push|pull|fetch|switch|checkout|merge|rebase|worktree)\b/
 
 // Names longer than this are cut in the collapsed row; the expanded one shows them whole
 const MAX_NAME = 18
@@ -40,19 +36,6 @@ function baseName(path: string): string {
   return path.split('/').filter(Boolean).pop() ?? path
 }
 
-function ciOf(checks: readonly Check[]): Ci {
-  if (!checks.length) {
-    return 'none'
-  }
-  const failed = ['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'ERROR']
-  if (checks.some(c => failed.includes(c.conclusion ?? c.state ?? ''))) {
-    return 'fail'
-  }
-  const isRunning = (c: Check) =>
-    c.state === 'PENDING' || (c.status !== undefined && c.status !== 'COMPLETED')
-  return checks.some(isRunning) ? 'running' : 'pass'
-}
-
 async function sh(
   $: EngineInterface,
   argv: string[],
@@ -60,7 +43,7 @@ async function sh(
   env?: Record<string, string>,
 ): Promise<Run> {
   try {
-    const r = await $.process.run(argv, { cwd, env, timeoutMs: 20_000 })
+    const r = await $.process.run(argv, { cwd, env, timeoutMs: 60_000 })
     return { ok: r.exitCode === 0, out: r.stdout.trim(), err: r.stderr.trim() }
   } catch (error) {
     return { ok: false, out: '', err: String(error) }
@@ -96,134 +79,46 @@ async function discoverRepos($: EngineInterface): Promise<void> {
   )
 }
 
-function parseWorktrees(porcelain: string, path: string): Worktree[] {
-  return porcelain
-    .split('\n\n')
-    .filter(Boolean)
-    .map(block => {
-      const wtPath = /^worktree (.+)$/m.exec(block)?.[1] ?? ''
-      const branch = /^branch refs\/heads\/(.+)$/m.exec(block)?.[1] ?? '(detached)'
-      return { path: wtPath, branch, isCurrent: wtPath === path }
-    })
-}
-
-async function loadPr($: EngineInterface, path: string): Promise<Pr | null> {
-  const r = await sh(
-    $,
-    ['gh', 'pr', 'view', '--json', 'number,state,isDraft,reviewDecision,statusCheckRollup'],
-    path,
-  )
-  if (!r.ok) {
-    return null
-  }
-  const pr = JSON.parse(r.out) as {
-    number: number
-    state: string
-    isDraft: boolean
-    reviewDecision: string
-    statusCheckRollup: Check[]
-  }
-  return {
-    number: pr.number,
-    state: pr.state,
-    isDraft: pr.isDraft,
-    review: pr.reviewDecision,
-    ci: ciOf(pr.statusCheckRollup ?? []),
-  }
-}
-
-async function loadBranchCi($: EngineInterface, path: string, branch: string): Promise<Ci> {
-  const r = await sh(
-    $,
-    ['gh', 'run', 'list', '--branch', branch, '--limit', '1', '--json', 'status,conclusion'],
-    path,
-  )
-  if (!r.ok) {
-    return 'none'
-  }
-  return ciOf(
-    (JSON.parse(r.out) as { status: string; conclusion: string }[]).map(c => ({
-      status: c.status.toUpperCase(),
-      conclusion: c.conclusion.toUpperCase(),
-    })),
-  )
-}
-
-async function count($: EngineInterface, path: string, args: string[]): Promise<number> {
-  const r = await sh($, ['gh', 'pr', 'list', ...args, '--limit', '200', '--json', 'number', '--jq', 'length'], path)
-  return r.ok ? Number(r.out) || 0 : 0
-}
-
-async function loadRepo($: EngineInterface, withGithub: boolean): Promise<void> {
+async function loadRepo($: EngineInterface): Promise<void> {
   const path = await read($, selected)
   if (path === null) {
     await update($, info, () => null)
     return
   }
   const git = (...args: string[]) => sh($, ['git', ...args], path)
-  const [branch, sha, ab, status, remotesRaw, refs, wts] = await Promise.all([
+  const [branch, sha, ab, status, remotesRaw, refs] = await Promise.all([
     git('branch', '--show-current'),
     git('rev-parse', '--short', 'HEAD'),
     git('rev-list', '--left-right', '--count', '@{u}...HEAD'),
     git('status', '--porcelain'),
     git('remote', '-v'),
     git('for-each-ref', '--format=%(refname:short)', 'refs/heads', 'refs/remotes'),
-    git('worktree', 'list', '--porcelain'),
   ])
-  const remotes: Remote[] = [
-    ...new Map(
-      remotesRaw.out
-        .split('\n')
-        .filter(line => line.endsWith('(fetch)'))
-        .map(line => {
-          const [name = '', url = ''] = line.split(/\s+/)
-          return [name, { name, slug: GITHUB_SLUG.exec(url)?.[1] ?? null }] as const
-        }),
-    ).values(),
+  const fetchLines = remotesRaw.out.split('\n').filter(line => line.endsWith('(fetch)'))
+  const remoteNames = fetchLines.map(line => line.split(/\s+/)[0] ?? '')
+  const slugs = [
+    ...new Set(fetchLines.flatMap(line => GITHUB_SLUG.exec(line.split(/\s+/)[1] ?? '')?.[1] ?? [])),
   ]
-  const remoteNames = remotes.map(r => r.name)
   const [behind = 0, ahead = 0] = ab.ok ? ab.out.split(/\s+/).map(Number) : []
-  const current = branch.out || sha.out
-  const previous = await read($, info)
-  const isSame = previous?.path === path && previous.branch === current
-  const mainSlug = remotes.find(r => r.slug !== null)?.slug ?? null
-  const active = (await read($, github)).find(a => a.isActive)?.login ?? ''
-  const canRead = mainSlug !== null && levelOf(await read($, access), mainSlug, active) !== null
-
-  let pr = isSame ? previous.pr : null
-  let branchCi: Ci = isSame ? previous.branchCi : 'none'
-  let openPrs = isSame ? previous.openPrs : 0
-  let reviewPrs = isSame ? previous.reviewPrs : 0
-  if (canRead && (withGithub || !isSame)) {
-    ;[pr, branchCi, openPrs, reviewPrs] = await Promise.all([
-      loadPr($, path),
-      loadBranchCi($, path, current),
-      count($, path, ['--state', 'open']),
-      count($, path, ['--search', 'review-requested:@me']),
-    ])
-  }
 
   await update($, info, () => ({
     path,
-    branch: current,
+    branch: branch.out || sha.out,
+    hasUpstream: ab.ok,
     ahead,
     behind,
     dirty: status.out ? status.out.split('\n').length : 0,
-    remotes,
+    slugs,
+    remoteNames,
     branches: refs.out
       .split('\n')
       .filter(ref => ref && !remoteNames.includes(ref) && !ref.endsWith('/HEAD')),
-    worktrees: parseWorktrees(wts.out, path),
-    pr,
-    branchCi,
-    openPrs,
-    reviewPrs,
   }))
 }
 
 // How each signed-in account can reach each GitHub remote of the selected repo
 async function checkAccess($: EngineInterface): Promise<void> {
-  const slugs = ((await read($, info))?.remotes ?? []).flatMap(r => (r.slug ? [r.slug] : []))
+  const slugs = (await read($, info))?.slugs ?? []
   const accounts = await read($, github)
   const result: Access = {}
   await Promise.all(
@@ -256,8 +151,6 @@ async function switchGithub(
     await $.store.set(`account:${rememberFor}`, login)
   }
   await loadGithub($)
-  // The new account may see PRs and CI the old one could not
-  await loadRepo($, true)
   return r.ok
 }
 
@@ -265,8 +158,8 @@ async function switchGithub(
 // account cannot push, the first that can push, then the first that can read
 async function autoPickAccount($: EngineInterface): Promise<void> {
   const repo = await read($, info)
-  const slug = repo?.remotes.find(r => r.slug !== null)?.slug ?? null
-  if (repo === null || slug === null) {
+  const slug = repo?.slugs[0]
+  if (repo === null || slug === undefined) {
     return
   }
   const levels = (await read($, access))[slug] ?? {}
@@ -285,10 +178,9 @@ async function autoPickAccount($: EngineInterface): Promise<void> {
 }
 
 async function loadRepoWithAccess($: EngineInterface): Promise<void> {
-  await loadRepo($, false)
+  await loadRepo($)
   await checkAccess($)
   await autoPickAccount($)
-  await loadRepo($, true)
 }
 
 async function refreshAll($: EngineInterface): Promise<void> {
@@ -306,9 +198,23 @@ async function gitAction($: EngineInterface, args: string[], done: string): Prom
   if (repo === null) {
     return
   }
+  $.ui.toast(`git ${args[0]}…`)
   const r = await sh($, ['git', ...args], repo.path)
-  $.ui.toast(r.ok ? done : `git: ${r.err.split('\n')[0]}`)
-  await loadRepo($, true)
+  $.ui.toast(r.ok ? done : `git: ${r.err.split('\n').pop()}`)
+  await loadRepo($)
+}
+
+async function push($: EngineInterface): Promise<void> {
+  const repo = await read($, info)
+  if (repo === null) {
+    return
+  }
+  // A branch with no upstream yet is published to the first remote under its own name
+  const args =
+    repo.hasUpstream || repo.remoteNames[0] === undefined
+      ? ['push']
+      : ['push', '-u', repo.remoteNames[0], 'HEAD']
+  await gitAction($, args, 'Pushed')
 }
 
 async function switchBranch($: EngineInterface, ref: string): Promise<void> {
@@ -318,59 +224,13 @@ async function switchBranch($: EngineInterface, ref: string): Promise<void> {
   }
   if (repo.dirty > 0) {
     $.ui.toast(`Not switching: ${repo.dirty} uncommitted file(s) in ${baseName(repo.path)}`)
-    await loadRepo($, false)
+    await loadRepo($)
     return
   }
   // A remote branch (origin/x) is checked out as a local tracking branch x
-  const remote = repo.remotes.find(r => ref.startsWith(`${r.name}/`))
-  const name = remote ? ref.slice(remote.name.length + 1) : ref
+  const remote = repo.remoteNames.find(name => ref.startsWith(`${name}/`))
+  const name = remote ? ref.slice(remote.length + 1) : ref
   await gitAction($, ['switch', name], `Switched to ${name}`)
-}
-
-async function createFromInput($: EngineInterface, kind: Creating, name: string): Promise<void> {
-  const repo = await read($, info)
-  await update($, creating, () => null)
-  if (repo === null || kind === null || !name.trim()) {
-    return
-  }
-  const valid = await sh($, ['git', 'check-ref-format', '--branch', name.trim()], repo.path)
-  if (!valid.ok) {
-    $.ui.toast(`Not a valid branch name: ${name}`)
-    return
-  }
-  const branch = valid.out
-  if (kind === 'branch') {
-    await gitAction($, ['switch', '-c', branch], `Created and switched to ${branch}`)
-    return
-  }
-  const wtPath = `${repo.path}-${branch.replace(/[^\w.-]+/g, '-')}`
-  await gitAction($, ['worktree', 'add', '-b', branch, wtPath], `Worktree ${branch} at ${wtPath}`)
-}
-
-async function openWorktree($: EngineInterface, path: string): Promise<void> {
-  const wt = (await read($, info))?.worktrees.find(w => w.path === path)
-  if (wt === undefined || wt.isCurrent) {
-    return
-  }
-  // ponytail: a mod cannot start a session, so it drafts the ask for Claude to move this one
-  await $.prompt.fill({ text: `Move this session to the worktree at ${wt.path} (branch ${wt.branch})` })
-}
-
-async function browse($: EngineInterface, target: string): Promise<void> {
-  const repo = await read($, info)
-  if (repo === null) {
-    return
-  }
-  const argv =
-    target === 'pr'
-      ? ['gh', 'pr', 'view', '--web']
-      : target === 'branch'
-        ? ['gh', 'browse', '--branch', repo.branch]
-        : ['gh', 'browse']
-  const r = await sh($, argv, repo.path)
-  if (!r.ok) {
-    $.ui.toast(`gh: ${r.err.split('\n')[0]}`)
-  }
 }
 
 export const register: Register = on => {
@@ -385,8 +245,8 @@ export const register: Register = on => {
     if (/\bgh\s+auth\b/.test(e.command)) {
       await loadGithub($)
     }
-    if (/\b(git|gh)\b/.test(e.command)) {
-      await loadRepo($, GITHUB_CHANGING.test(e.command))
+    if (/\bgit\b/.test(e.command)) {
+      await loadRepo($)
     }
     return ran
   }).catch(($, e, next) => next(e))
@@ -400,13 +260,12 @@ export const register: Register = on => {
     const repo = await read($, info)
     const repoList = await read($, repos)
     const levels = await read($, access)
-    const pending = await read($, creating)
     const expanded = await read($, isExpanded)
     const table = $.ui.resolve(e)
     const { Box, Button, Text } = table
     const hasSvg = 'Svg' in table
     const active = accounts.find(a => a.isActive)
-    const mainSlug = repo?.remotes.find(r => r.slug !== null)?.slug ?? null
+    const mainSlug = repo?.slugs[0] ?? null
     const levelFor = (login: string) => (mainSlug ? levelOf(levels, mainSlug, login) : null)
     const activeLevel = active ? levelFor(active.login) : null
     // A repo shows only to an account that can read it (or when it has no GitHub remote)
@@ -428,12 +287,28 @@ export const register: Register = on => {
     const action = (key: string, value: string, onPress: () => unknown) => (
       <Button key={key} label={value} plain dimColor hover={{ dimColor: false }} onPress={onPress} />
     )
-    const hideButton = action('hide', '×', () => update($, isHidden, () => true))
-    const toggle = action('toggle', expanded ? '▾ less' : '▸ more', () =>
-      update($, isExpanded, value => !value),
+    // A symbol-only button whose name appears above it while the pointer is on it
+    const iconAction = (key: string, icon: string, name: string, onPress: () => unknown) => (
+      <Box key={key} position="relative">
+        {action(`${key}-button`, icon, onPress)}
+        <Box
+          position="absolute"
+          top={-24}
+          left={0}
+          display="none"
+          hover={{ display: 'flex' }}
+          backgroundColor={TIP.fill}
+          borderStyle="round"
+          borderColor={TIP.border}
+          paddingX={1}
+        >
+          <Text size="caption" mono color={TIP.text}>
+            {name}
+          </Text>
+        </Box>
+      </Box>
     )
 
-    const ci = shown?.pr?.ci ?? shown?.branchCi ?? 'none'
     const summary = shown
       ? [
           shown.ahead ? `↑${shown.ahead}` : '',
@@ -459,15 +334,9 @@ export const register: Register = on => {
             {summary ? text(summary, shown.dirty ? DOT.warn : undefined, !shown.dirty) : null}
           </Box>
         ) : null}
-        {shown?.pr ? (
-          <Box flexDirection="row" alignItems="center" gap="xs">
-            {dot(CI_DOT[ci])}
-            {text(`PR #${shown.pr.number}`)}
-          </Box>
-        ) : null}
         <Box flexDirection="row" alignItems="center" gap="sm">
-          {toggle}
-          {hideButton}
+          {action('toggle', expanded ? '▾ less' : '▸ more', () => update($, isExpanded, value => !value))}
+          {action('hide', '×', () => update($, isHidden, () => true))}
         </Box>
       </Box>
     )
@@ -477,89 +346,34 @@ export const register: Register = on => {
     }
 
     // Expanded: one labelled line per topic, the label column lined up
-    const { Input, Select } = table
+    const { Select } = table
     const section = (key: string, title: string, children: RenderChildren[]) => (
       <Box key={key} flexDirection="row" alignItems="center" gap="md" width="100%">
-        {text(title.padEnd(9), undefined, true)}
+        {text(title.padEnd(8), undefined, true)}
         <Box flexDirection="row" alignItems="center" gap="md" flexGrow={1}>
           {children}
         </Box>
       </Box>
     )
 
-    const others = accounts.filter(a => !a.isActive)
-    const accountLine = section(
-      'accounts',
-      'Account',
-      [
-        text(`${active?.login ?? 'signed out'}${activeLevel === 'read' ? ' (read only)' : ''}`),
-        ...others.map(a =>
+    const accountLine = section('accounts', 'Account', [
+      text(`${active?.login ?? 'signed out'}${activeLevel === 'read' ? ' (read only)' : ''}`),
+      ...accounts
+        .filter(a => !a.isActive)
+        .map(a =>
           action(
             `sw-${a.login}`,
             `⇄ ${shortName(a.login)}${levelFor(a.login) ? ' ●' : ''}`,
             () => switchGithub($, a.login, shown?.path ?? null),
           ),
         ),
-      ],
-    )
-
-    if (shown === null) {
-      return (
-        <Box flexDirection="column" width="100%" gap="xs">
-          {headline}
-          {accountLine}
-        </Box>
-      )
-    }
-
-    const createLine =
-      pending !== null
-        ? section('create', pending === 'branch' ? 'New branch' : 'New tree', [
-            <Input
-              key="create-name"
-              placeholder={pending === 'branch' ? 'branch name' : 'branch for the new worktree'}
-              submitLabel="Create"
-              autoFocus
-              onSubmit={name => createFromInput($, pending, name)}
-            />,
-            action('cancel', 'cancel', () => update($, creating, () => null)),
-          ])
-        : null
-
-    const prLine = mainSlug
-      ? section('pr', 'Pull req', [
-          shown.pr ? (
-            <Box key="pr-chip" flexDirection="row" alignItems="center" gap="xs">
-              {dot(CI_DOT[ci])}
-              {text(
-                `#${shown.pr.number} ${shown.pr.isDraft ? 'draft' : shown.pr.state.toLowerCase()}${
-                  shown.pr.review ? ` · ${shown.pr.review.toLowerCase().replace(/_/g, ' ')}` : ''
-                }${ci === 'none' ? '' : ` · CI ${ci}`}`,
-              )}
-            </Box>
-          ) : (
-            text(`no PR for this branch${ci === 'none' ? '' : ` · CI ${ci}`}`, undefined, true)
-          ),
-          text(`${shown.openPrs} open · ${shown.reviewPrs} to review`, undefined, true),
-          <Select
-            key="open"
-            label="↗ open"
-            value="repo"
-            options={[
-              { value: 'repo', label: 'repo' },
-              { value: 'branch', label: 'branch' },
-              ...(shown.pr ? [{ value: 'pr', label: `PR #${shown.pr.number}` }] : []),
-            ]}
-            onSelect={target => browse($, target)}
-          />,
-        ])
-      : null
+    ])
 
     return (
       <Box flexDirection="column" width="100%" gap="xs">
         {headline}
         {accountLine}
-        {repoList.length > 1
+        {shown && repoList.length > 1
           ? section('repo', 'Repo', [
               <Select
                 key="repo"
@@ -569,49 +383,22 @@ export const register: Register = on => {
               />,
             ])
           : null}
-        {section('branch', 'Branch', [
-          <Select
-            key="branch"
-            value={shown.branch}
-            options={(shown.branches.includes(shown.branch) ? shown.branches : [shown.branch, ...shown.branches]).map(
-              b => ({ value: b }),
-            )}
-            onSelect={b => switchBranch($, b)}
-          />,
-          text(`↑${shown.ahead} ↓${shown.behind} · ${shown.dirty} changed`, undefined, true),
-          action('fetch', '⟳ fetch', () => gitAction($, ['fetch', '--all', '--prune'], 'Fetched')),
-          action('pull', '⇣ pull', () => gitAction($, ['pull', '--ff-only'], 'Pulled')),
-          action('new-branch', '+ new', () => update($, creating, () => 'branch')),
-        ])}
-        {section('worktree', 'Worktree', [
-          shown.worktrees.length > 1 ? (
-            <Select
-              key="worktree"
-              value={shown.path}
-              options={shown.worktrees.map(w => ({ value: w.path, label: `${baseName(w.path)} (${w.branch})` }))}
-              onSelect={p => openWorktree($, p)}
-            />
-          ) : (
-            text('only this one', undefined, true)
-          ),
-          action('new-worktree', '+ new', () => update($, creating, () => 'worktree')),
-        ])}
-        {createLine}
-        {shown.remotes.length
-          ? section(
-              'remotes',
-              'Remotes',
-              shown.remotes.map(r =>
-                text(
-                  `${r.name} ${r.slug ?? ''}${
-                    r.slug && active && levelOf(levels, r.slug, active.login) === 'push' ? ' ✓' : r.slug ? ' ✗' : ''
-                  }`,
-                ),
-              ),
-            )
+        {shown
+          ? section('branch', 'Branch', [
+              <Select
+                key="branch"
+                value={shown.branch}
+                options={(shown.branches.includes(shown.branch)
+                  ? shown.branches
+                  : [shown.branch, ...shown.branches]
+                ).map(b => ({ value: b }))}
+                onSelect={b => switchBranch($, b)}
+              />,
+              iconAction('fetch', '⟳', 'fetch', () => gitAction($, ['fetch', '--all', '--prune'], 'Fetched')),
+              iconAction('pull', '⇣', 'pull', () => gitAction($, ['pull', '--ff-only'], 'Pulled')),
+              iconAction('push', '⇡', 'push', () => push($)),
+            ])
           : null}
-        {prLine}
-        {section('refresh', '', [action('refresh', '↻ refresh', () => refreshAll($))])}
       </Box>
     )
   })

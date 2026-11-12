@@ -1,24 +1,14 @@
 # accounts-band
 
-A Claude Code mod that puts the GitHub side of the project you're in right above the prompt box.
+A Claude Code mod that puts your GitHub account and the project's branch right above the prompt box.
 
-Collapsed, it is one line: the active account, the repo and branch, ahead/behind/uncommitted counts and the PR's CI dot. `▸ more` opens one labelled line per topic below; `▾ less` folds it again.
+Collapsed, it is one line: the active account, the repo and branch, and ahead/behind/uncommitted counts. `▸ more` opens:
 
-**Accounts**
-- The active `gh` account and a `⇄ <login>` button for each other one. A green dot marks accounts that can reach the repo.
-- On opening a project it switches to the account you last picked there, or else to one that can push to the repo.
-- If the active account can't read the repo, only the account row shows until you switch.
+- **Account**: the active `gh` account and a `⇄ <login>` button for each other one; `●` marks accounts that can reach the repo.
+- **Repo**: a picker when the project holds several repos (nested up to 3 folders down).
+- **Branch**: a branch picker (refuses to switch with uncommitted changes) and `⟳` fetch, `⇣` pull (fast-forward only), `⇡` push. Hover a symbol to see its name.
 
-**Repository** (the repo the session runs in, plus separate repos nested up to 3 folders down)
-- Repo picker, branch picker (refuses to switch with uncommitted changes), ahead/behind and uncommitted count.
-- Every remote with its owner/repo and whether the active account can push (✓/✗).
-- Worktree picker: choosing one drafts a prompt asking Claude to move the session there.
-- Fetch, pull (fast-forward only), new branch and new worktree buttons.
-
-**Pull requests**
-- The PR for the current branch with its state, review status and CI, or the branch's latest CI run.
-- Open PRs in the repo and how many wait for your review.
-- `↗` opens the repo, branch or PR on github.com. `↻` refreshes everything; `×` hides the band.
+On opening a project it switches to the account you last picked there, or else to one that can push to the repo. If the active account can't read the repo, only the account shows. `×` hides the band.
 
 ## Install
 
