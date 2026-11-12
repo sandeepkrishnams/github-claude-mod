@@ -24,7 +24,6 @@ declare module 'claude-code' {
       // repo path -> its state, in the order found
       repoStates: Record<string, RepoState>
       access: Access
-      isExpanded: boolean
       isLoading: boolean
     }
   }

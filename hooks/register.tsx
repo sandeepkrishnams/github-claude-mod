@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderChildren } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 
 import type { Access, GhAccount, RepoState } from '../types'
 
@@ -8,7 +8,6 @@ const isHidden = atom({ plugin: 'accounts-band', key: 'isHidden' } as const, fal
 // Keyed apart from the old 'repos' list: $.state outlives a reload, so a renamed shape needs a new key
 const repos = atom({ plugin: 'accounts-band', key: 'repoStates' } as const, {} as Record<string, RepoState>)
 const access = atom({ plugin: 'accounts-band', key: 'access' } as const, {} as Access)
-const isExpanded = atom({ plugin: 'accounts-band', key: 'isExpanded' } as const, false)
 const isLoading = atom({ plugin: 'accounts-band', key: 'isLoading' } as const, false)
 
 type Gh = { hosts: Record<string, { login: string; active: boolean }[]> }
@@ -21,7 +20,7 @@ const DOT = { active: '#3FB950', idle: '#8B949E', warn: '#D29922' } as const
 const TIP = { fill: '#161B22', border: '#30363D', text: '#E6EDF3' } as const
 const GITHUB_SLUG = /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?$/
 
-// Names longer than this are cut in the collapsed row; the expanded one shows them whole
+// Names longer than this are cut short where they are shown as plain text
 const MAX_NAME = 18
 
 function shortName(name: string): string {
@@ -244,7 +243,6 @@ export const register: Register = on => {
 
     const accounts = await read($, github)
     const levels = await read($, access)
-    const expanded = await read($, isExpanded)
     const loading = await read($, isLoading)
     const table = $.ui.resolve(e)
     const { Box, Button, Text } = table
@@ -266,7 +264,6 @@ export const register: Register = on => {
         {value}
       </Text>
     )
-    const dot = (color: string) => <Text color={color}>●</Text>
     const action = (key: string, value: string, onPress: () => unknown) => (
       <Button key={key} label={value} plain dimColor hover={{ dimColor: false }} onPress={onPress} />
     )
@@ -295,92 +292,66 @@ export const register: Register = on => {
       [repo.ahead ? `↑${repo.ahead}` : '', repo.behind ? `↓${repo.behind}` : '', repo.dirty ? `●${repo.dirty}` : '']
         .filter(Boolean)
         .join(' ')
-
-    const first = visible[0]
-    const where =
-      visible.length === 1 && first ? (
-        <Box flexDirection="row" alignItems="center" gap="sm">
-          {text(baseName(first.path), undefined, true)}
-          {text(`⎇ ${shortName(first.branch)}`)}
-          {counts(first) ? text(counts(first), first.dirty ? DOT.warn : undefined, !first.dirty) : null}
-        </Box>
-      ) : visible.length > 1 ? (
-        text(
-          `${visible.length} repos${visible.some(r => r.dirty) ? ` · ${visible.filter(r => r.dirty).length} with changes` : ''}`,
-          undefined,
-          true,
-        )
-      ) : (
-        text(loading ? 'looking for repos…' : 'no git repo here', undefined, true)
-      )
-
-    // Collapsed: who you are, where you are, and whether anything needs a look
-    const headline = (
-      <Box key="headline" flexDirection="row" alignItems="center" justifyContent="space-between" width="100%">
-        <Box flexDirection="row" alignItems="center" gap="sm">
-          {githubLogo}
-          {dot(active ? DOT.active : DOT.idle)}
-          {text(shortName(active?.login ?? 'signed out'))}
-        </Box>
-        {where}
-        <Box flexDirection="row" alignItems="center" gap="sm">
-          {iconAction('refresh', '↻', 'refresh', () => refreshAll($))}
-          {action('toggle', expanded ? '▾ less' : '▸ more', () => update($, isExpanded, value => !value))}
-          {action('hide', '×', () => update($, isHidden, () => true))}
-        </Box>
-      </Box>
-    )
-
-    if (!expanded || !('Select' in table)) {
-      return headline
-    }
-
-    // Expanded: one labelled line per topic, the label column lined up
-    const { Select } = table
-    const labelWidth = Math.max(8, ...visible.map(r => baseName(r.path).length + 1))
-    const section = (key: string, title: string, children: RenderChildren[]) => (
-      <Box key={key} flexDirection="row" alignItems="center" gap="md" width="100%">
-        {text(title.padEnd(labelWidth), undefined, true)}
-        <Box flexDirection="row" alignItems="center" gap="md" flexGrow={1}>
-          {children}
-        </Box>
-      </Box>
-    )
-    const reachesAny = (login: string) =>
+    const reaches = (login: string) =>
       visible.some(r => r.slugs[0] !== undefined && levels[r.slugs[0]]?.[login] !== undefined)
 
-    return (
-      <Box flexDirection="column" width="100%" gap="xs">
-        {headline}
-        {section('accounts', 'Account', [
-          text(active?.login ?? 'signed out'),
-          ...accounts
-            .filter(a => !a.isActive)
-            .map(a =>
-              action(`sw-${a.login}`, `⇄ ${shortName(a.login)}${reachesAny(a.login) ? ' ●' : ''}`, () =>
-                switchGithub($, a.login, true),
-              ),
-            ),
-        ])}
-        {visible.map(repo =>
-          section(`repo-${repo.path}`, baseName(repo.path), [
-            <Select
-              key={`branch-${repo.path}`}
-              label="⎇"
-              value={repo.branch}
-              options={(repo.branches.includes(repo.branch) ? repo.branches : [repo.branch, ...repo.branches]).map(
-                b => ({ value: b }),
-              )}
-              onSelect={b => switchBranch($, repo, b)}
-            />,
-            counts(repo) ? text(counts(repo), repo.dirty ? DOT.warn : undefined, !repo.dirty) : null,
-            iconAction(`fetch-${repo.path}`, '⟳', 'fetch', () =>
-              gitAction($, repo.path, ['fetch', '--all', '--prune'], 'fetched'),
-            ),
-            iconAction(`pull-${repo.path}`, '⇣', 'pull', () => gitAction($, repo.path, ['pull', '--ff-only'], 'pulled')),
-            iconAction(`push-${repo.path}`, '⇡', 'push', () => push($, repo)),
-          ]),
+    // The mobile app draws no Select: names stand in for the pickers there
+    const hasPickers = 'Select' in table
+    const account =
+      hasPickers && accounts.length > 1 ? (
+        <table.Select
+          key="account"
+          value={active?.login ?? ''}
+          options={accounts.map(a => ({
+            value: a.login,
+            label: `${a.login}${!a.isActive && reaches(a.login) ? ' ●' : ''}`,
+          }))}
+          onSelect={login => switchGithub($, login, true)}
+        />
+      ) : (
+        text(shortName(active?.login ?? 'signed out'))
+      )
+
+    const repoGroup = (repo: RepoState) => (
+      <Box key={`repo-${repo.path}`} flexDirection="row" alignItems="center" gap="sm">
+        {text(baseName(repo.path), undefined, true)}
+        {hasPickers ? (
+          <table.Select
+            key={`branch-${repo.path}`}
+            label="⎇"
+            value={repo.branch}
+            options={(repo.branches.includes(repo.branch) ? repo.branches : [repo.branch, ...repo.branches]).map(
+              b => ({ value: b }),
+            )}
+            onSelect={b => switchBranch($, repo, b)}
+          />
+        ) : (
+          text(`⎇ ${shortName(repo.branch)}`)
         )}
+        {counts(repo) ? text(counts(repo), repo.dirty ? DOT.warn : undefined, !repo.dirty) : null}
+        {iconAction(`fetch-${repo.path}`, '⟳', 'fetch', () =>
+          gitAction($, repo.path, ['fetch', '--all', '--prune'], 'fetched'),
+        )}
+        {iconAction(`pull-${repo.path}`, '⇣', 'pull', () => gitAction($, repo.path, ['pull', '--ff-only'], 'pulled'))}
+        {iconAction(`push-${repo.path}`, '⇡', 'push', () => push($, repo))}
+      </Box>
+    )
+
+    // One row: account, then each repo with its branch and actions, then refresh and close
+    return (
+      <Box key="band" flexDirection="row" alignItems="center" justifyContent="space-between" width="100%" paddingX="sm">
+        <Box key="who" flexDirection="row" alignItems="center" gap="sm">
+          {githubLogo}
+          <Text color={active ? DOT.active : DOT.idle}>●</Text>
+          {account}
+        </Box>
+        {visible.length
+          ? visible.map(repoGroup)
+          : text(loading ? 'looking for repos…' : 'no git repo here', undefined, true)}
+        <Box key="tools" flexDirection="row" alignItems="center" gap="sm">
+          {iconAction('refresh', '↻', 'refresh', () => refreshAll($))}
+          {action('hide', '×', () => update($, isHidden, () => true))}
+        </Box>
       </Box>
     )
   }).catch(($, e, next) => next(e))
