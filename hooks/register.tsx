@@ -18,6 +18,9 @@ const GITHUB_LOGO =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#8B949E" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>'
 
 const DOT = { active: '#3FB950', idle: '#8B949E', warn: '#D29922' } as const
+// One hue per meaning, readable on light and dark: ahead/pull green, behind/push blue,
+// branch purple, the selected repo orange
+const HUE = { ahead: '#3FB950', behind: '#58A6FF', branch: '#A371F7', repo: '#F0883E' } as const
 const TIP = { fill: '#161B22', border: '#30363D', text: '#E6EDF3' } as const
 const GITHUB_SLUG = /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?$/
 
@@ -72,7 +75,7 @@ async function readRepo($: EngineInterface, path: string): Promise<RepoState> {
     git('rev-list', '--left-right', '--count', '@{u}...HEAD'),
     git('status', '--porcelain'),
     git('remote', '-v'),
-    git('for-each-ref', '--format=%(refname:short)', 'refs/heads', 'refs/remotes'),
+    git('for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads', 'refs/remotes'),
   ])
   const fetchLines = remotesRaw.out.split('\n').filter(line => line.endsWith('(fetch)'))
   const remoteNames = fetchLines.map(line => line.split(/\s+/)[0] ?? '')
@@ -225,6 +228,52 @@ async function switchBranch($: EngineInterface, repo: RepoState, ref: string): P
   await gitAction($, repo.path, ['switch', name], `switched to ${name}`)
 }
 
+// The pickers are plain text buttons that open Claude's choice dialog: a dropdown
+// carries a background the band cannot take off. The dialog shows 2 to 4 choices
+// and "Other", where any name can be typed.
+async function pickAccount($: EngineInterface): Promise<void> {
+  const accounts = await read($, github)
+  const active = accounts.find(a => a.isActive)?.login
+  // Accounts that can reach the project's repos come first
+  const levels = await read($, access)
+  const reaches = (login: string) => Object.values(levels).some(l => l[login] !== undefined)
+  const others = accounts
+    .filter(a => !a.isActive)
+    .map(a => a.login)
+    .sort((x, y) => Number(reaches(y)) - Number(reaches(x)))
+  const choices = [...others, ...(active ? [active] : [])].slice(0, 4)
+  if (choices.length < 2) {
+    return
+  }
+  const login = await $.ui.ask('Switch to which GitHub account?', { header: 'Account', options: choices }).catch(
+    () => null,
+  )
+  if (login !== null && login !== active) {
+    await switchGithub($, login.trim(), true)
+  }
+}
+
+async function pickBranch($: EngineInterface, repo: RepoState): Promise<void> {
+  // Most recently committed first; a remote branch only when no local one shares its name
+  const local = new Set(repo.branches.filter(b => !repo.remoteNames.some(r => b.startsWith(`${r}/`))))
+  const choices = repo.branches
+    .filter(b => b !== repo.branch)
+    .filter(b => {
+      const remote = repo.remoteNames.find(r => b.startsWith(`${r}/`))
+      return remote === undefined || !local.has(b.slice(remote.length + 1))
+    })
+    .slice(0, 4)
+  if (choices.length < 2) {
+    choices.push(repo.branch)
+  }
+  const branch = await $.ui
+    .ask(`Switch ${baseName(repo.path)} to which branch?`, { header: 'Branch', options: choices })
+    .catch(() => null)
+  if (branch !== null) {
+    await switchBranch($, repo, branch.trim())
+  }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -268,13 +317,25 @@ export const register: Register = on => {
       <Text bold>◉</Text>
     )
 
-    const action = (key: string, value: string, onPress: () => unknown) => (
-      <Button key={key} label={value} plain dimColor hover={{ dimColor: false }} onPress={onPress} />
+    const action = (key: string, value: string, onPress: () => unknown, hue?: string) => (
+      <Button
+        key={key}
+        label={value}
+        plain
+        dimColor
+        hover={hue ? { dimColor: false, color: hue } : { dimColor: false }}
+        onPress={onPress}
+      />
+    )
+    const quiet = (value: string, color?: string) => (
+      <Text size="caption" mono color={color} dimColor={color === undefined}>
+        {value}
+      </Text>
     )
     // A symbol-only button whose name appears above it while the pointer is on it
-    const iconAction = (key: string, icon: string, name: string, onPress: () => unknown) => (
+    const iconAction = (key: string, icon: string, name: string, onPress: () => unknown, hue?: string) => (
       <Box key={key} position="relative">
-        {action(`${key}-button`, icon, onPress)}
+        {action(`${key}-button`, icon, onPress, hue)}
         <Box
           position="absolute"
           top={-24}
@@ -292,31 +353,23 @@ export const register: Register = on => {
         </Box>
       </Box>
     )
+    // Ahead, behind and uncommitted counts, each in its own colour, only when not zero
     const counts = (repo: RepoState) =>
-      [repo.ahead ? `↑${repo.ahead}` : '', repo.behind ? `↓${repo.behind}` : '', repo.dirty ? `●${repo.dirty}` : '']
-        .filter(Boolean)
-        .join(' ')
-    const reaches = (login: string) =>
-      visible.some(r => r.slugs[0] !== undefined && levels[r.slugs[0]]?.[login] !== undefined)
+      [
+        repo.ahead ? quiet(`↑${repo.ahead}`, HUE.ahead) : null,
+        repo.behind ? quiet(`↓${repo.behind}`, HUE.behind) : null,
+        repo.dirty ? quiet(`●${repo.dirty}`, DOT.warn) : null,
+      ].filter(Boolean)
 
-    // The mobile app draws no Select: names stand in for the pickers there
-    const hasPickers = 'Select' in table
-    const quiet = (value: string, color?: string) => (
-      <Text size="caption" mono color={color} dimColor={color === undefined}>
-        {value}
-      </Text>
-    )
 
     const account =
-      hasPickers && accounts.length > 1 ? (
-        <table.Select
+      accounts.length > 1 ? (
+        <Button
           key="account"
-          value={active?.login ?? ''}
-          options={accounts.map(a => ({
-            value: a.login,
-            label: `${a.login}${!a.isActive && reaches(a.login) ? ' ●' : ''}`,
-          }))}
-          onSelect={login => switchGithub($, login, true)}
+          label={`${shortName(active?.login ?? 'signed out')} ▾`}
+          plain
+          hover={{ color: DOT.active }}
+          onPress={() => pickAccount($)}
         />
       ) : (
         quiet(shortName(active?.login ?? 'signed out'))
@@ -328,18 +381,18 @@ export const register: Register = on => {
 
     const tab = (repo: RepoState) => {
       const isCurrent = repo.path === current?.path
-      const mark = counts(repo)
       return (
         <Box key={`tab-${repo.path}`} flexDirection="row" alignItems="center" gap="xs">
+          {isCurrent ? <Text color={HUE.repo}>▸</Text> : null}
           <Button
             key={`tab-button-${repo.path}`}
             label={baseName(repo.path)}
             plain
             dimColor={!isCurrent}
-            hover={{ dimColor: false }}
+            hover={{ dimColor: false, color: HUE.repo }}
             onPress={() => update($, currentRepo, () => repo.path)}
           />
-          {mark ? quiet(mark, repo.dirty ? DOT.warn : undefined) : null}
+          {counts(repo)}
         </Box>
       )
     }
@@ -351,6 +404,7 @@ export const register: Register = on => {
         <Box key="left" flexDirection="row" alignItems="center" gap="sm">
           <Box key="who" flexDirection="row" alignItems="center" gap="xs">
             {githubLogo}
+            <Text color={active ? DOT.active : DOT.idle}>●</Text>
             {account}
           </Box>
           {visible.length
@@ -361,29 +415,23 @@ export const register: Register = on => {
         <Box key="right" flexDirection="row" alignItems="center" gap="xs">
           {current ? (
             <Box key="branch" flexDirection="row" alignItems="center" gap="xs">
-              {quiet('⎇')}
-              {hasPickers ? (
-                <table.Select
-                  key={`branch-${current.path}`}
-                  value={current.branch}
-                  options={(current.branches.includes(current.branch)
-                    ? current.branches
-                    : [current.branch, ...current.branches]
-                  ).map(b => ({ value: b }))}
-                  onSelect={b => switchBranch($, current, b)}
-                />
-              ) : (
-                quiet(shortName(current.branch))
-              )}
+              {quiet('⎇', HUE.branch)}
+              <Button
+                key={`branch-${current.path}`}
+                label={`${shortName(current.branch)} ▾`}
+                plain
+                hover={{ color: HUE.branch }}
+                onPress={() => pickBranch($, current)}
+              />
               {iconAction(`pull-${current.path}`, '⇣', 'pull', () =>
-                gitAction($, current.path, ['pull', '--ff-only'], 'pulled'),
+                gitAction($, current.path, ['pull', '--ff-only'], 'pulled'), HUE.ahead,
               )}
-              {iconAction(`push-${current.path}`, '⇡', 'push', () => push($, current))}
+              {iconAction(`push-${current.path}`, '⇡', 'push', () => push($, current), HUE.behind)}
             </Box>
           ) : null}
           {/* The one refresh: fetches every remote of the current repo, then re-reads
               accounts and repos; with no repo it only re-reads */}
-          {iconAction('sync', '⟳', current ? 'fetch & refresh' : 'refresh', () => syncAll($, current?.path))}
+          {iconAction('sync', '⟳', current ? 'fetch & refresh' : 'refresh', () => syncAll($, current?.path), HUE.branch)}
           {action('hide', '×', () => update($, isHidden, () => true))}
         </Box>
       </Box>
