@@ -170,44 +170,42 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
+    // One row, every item spaced evenly across the full width
     return (
-      <Box flexDirection="row" alignItems="center" justifyContent="space-between" width="100%" paddingX="xs">
-        <Box flexDirection="row" alignItems="center" gap="sm" flexWrap="wrap">
-          {githubLogo}
-          {chip('gh-active', active ? STATUS.active : STATUS.unknown, active?.login ?? 'signed out')}
-          {accounts
-            .filter(a => !a.isActive)
-            .map(a =>
-              chip(
-                `gh-${a.login}`,
-                STATUS.unknown,
-                a.login,
-                <Button
-                  key={`sw-${a.login}`}
-                  label={`⇄ ${shortName(a.login)}`}
-                  plain
-                  dimColor
-                  hover={{ dimColor: false }}
-                  onPress={() => switchGithub($, a.login)}
-                />,
-              ),
-            )}
-        </Box>
-        <Box flexDirection="row" alignItems="center" gap="sm">
-          {zohoLogo}
-          {chip(
-            'zoho',
-            STATUS[zohoStatus],
-            `${zohoName}${zohoMark}`,
-            <Button
-              key="zoho-check"
-              label={`${shortName(zohoName)}${zohoMark}`}
-              plain
-              onPress={() => recheckZoho($, teamId)}
-            />,
+      <Box flexDirection="row" alignItems="center" justifyContent="space-between" width="100%" paddingX="sm">
+        {githubLogo}
+        {chip('gh-active', active ? STATUS.active : STATUS.unknown, active?.login ?? 'signed out')}
+        {accounts
+          .filter(a => !a.isActive)
+          .map(a =>
+            chip(
+              `gh-${a.login}`,
+              STATUS.unknown,
+              a.login,
+              <Button
+                key={`sw-${a.login}`}
+                label={`⇄ ${shortName(a.login)}`}
+                plain
+                dimColor
+                hover={{ dimColor: false }}
+                onPress={() => switchGithub($, a.login)}
+              />,
+            ),
           )}
-          <Button key="hide" label="×" plain dimColor onPress={() => update($, isHidden, () => true)} />
-        </Box>
+        <Text dimColor>│</Text>
+        {zohoLogo}
+        {chip(
+          'zoho',
+          STATUS[zohoStatus],
+          `${zohoName}${zohoMark}`,
+          <Button
+            key="zoho-check"
+            label={`${shortName(zohoName)}${zohoMark}`}
+            plain
+            onPress={() => recheckZoho($, teamId)}
+          />,
+        )}
+        <Button key="hide" label="×" plain dimColor onPress={() => update($, isHidden, () => true)} />
       </Box>
     )
   })
