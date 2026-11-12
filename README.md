@@ -1,10 +1,9 @@
 # accounts-band
 
-A Claude Code mod that puts your GitHub account and the project's repos in one row right above the prompt box:
+A Claude Code mod that puts your GitHub account and the project's repos in one quiet row right above the prompt box.
 
-- **Account**: a dropdown of your signed-in `gh` accounts; picking one runs `gh auth switch`. `●` marks accounts that can reach the project's repos.
-- **Each repo**: the repo the session is in and every separate repo nested up to 3 folders down, each with a branch dropdown (refuses to switch with uncommitted changes), ahead/behind/uncommitted counts, and `⟳` fetch, `⇣` pull (fast-forward only), `⇡` push. Hover a symbol to see its name.
-- `↻` refreshes, `×` hides the band.
+- **Left**: a dropdown of your signed-in `gh` accounts (picking one runs `gh auth switch`; `●` marks accounts that can reach the project's repos), then one tab per repo: the repo the session is in and every separate repo nested up to 3 folders down, each with its ahead/behind/uncommitted counts.
+- **Right**, for the selected tab: a branch dropdown (refuses to switch with uncommitted changes) and `⟳` fetch, `⇣` pull (fast-forward only), `⇡` push. Hover a symbol to see its name. `↻` refreshes, `×` hides the band.
 
 On opening a project it switches to the account you last picked there, or else to one that can push to its first GitHub repo. A repo the active account can't read is left out.
 

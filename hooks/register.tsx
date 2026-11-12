@@ -9,6 +9,7 @@ const isHidden = atom({ plugin: 'accounts-band', key: 'isHidden' } as const, fal
 const repos = atom({ plugin: 'accounts-band', key: 'repoStates' } as const, {} as Record<string, RepoState>)
 const access = atom({ plugin: 'accounts-band', key: 'access' } as const, {} as Access)
 const isLoading = atom({ plugin: 'accounts-band', key: 'isLoading' } as const, false)
+const currentRepo = atom({ plugin: 'accounts-band', key: 'currentRepo' } as const, null as string | null)
 
 type Gh = { hosts: Record<string, { login: string; active: boolean }[]> }
 type Run = { ok: boolean; out: string; err: string }
@@ -259,11 +260,6 @@ export const register: Register = on => {
       <Text bold>◉</Text>
     )
 
-    const text = (value: string, color?: string, isDim = false) => (
-      <Text size="caption" mono color={color} dimColor={isDim}>
-        {value}
-      </Text>
-    )
     const action = (key: string, value: string, onPress: () => unknown) => (
       <Button key={key} label={value} plain dimColor hover={{ dimColor: false }} onPress={onPress} />
     )
@@ -297,6 +293,17 @@ export const register: Register = on => {
 
     // The mobile app draws no Select: names stand in for the pickers there
     const hasPickers = 'Select' in table
+    const quiet = (value: string, color?: string) => (
+      <Text size="caption" mono color={color} dimColor={color === undefined}>
+        {value}
+      </Text>
+    )
+    const divider = (key: string) => (
+      <Text key={key} dimColor>
+        │
+      </Text>
+    )
+
     const account =
       hasPickers && accounts.length > 1 ? (
         <table.Select
@@ -309,46 +316,72 @@ export const register: Register = on => {
           onSelect={login => switchGithub($, login, true)}
         />
       ) : (
-        text(shortName(active?.login ?? 'signed out'))
+        quiet(shortName(active?.login ?? 'signed out'))
       )
 
-    const repoGroup = (repo: RepoState) => (
-      <Box key={`repo-${repo.path}`} flexDirection="row" alignItems="center" gap="sm">
-        {text(baseName(repo.path), undefined, true)}
-        {hasPickers ? (
-          <table.Select
-            key={`branch-${repo.path}`}
-            label="⎇"
-            value={repo.branch}
-            options={(repo.branches.includes(repo.branch) ? repo.branches : [repo.branch, ...repo.branches]).map(
-              b => ({ value: b }),
-            )}
-            onSelect={b => switchBranch($, repo, b)}
-          />
-        ) : (
-          text(`⎇ ${shortName(repo.branch)}`)
-        )}
-        {counts(repo) ? text(counts(repo), repo.dirty ? DOT.warn : undefined, !repo.dirty) : null}
-        {iconAction(`fetch-${repo.path}`, '⟳', 'fetch', () =>
-          gitAction($, repo.path, ['fetch', '--all', '--prune'], 'fetched'),
-        )}
-        {iconAction(`pull-${repo.path}`, '⇣', 'pull', () => gitAction($, repo.path, ['pull', '--ff-only'], 'pulled'))}
-        {iconAction(`push-${repo.path}`, '⇡', 'push', () => push($, repo))}
-      </Box>
-    )
+    // The tab picked by hand while it is still listed, else the first repo
+    const picked = await read($, currentRepo)
+    const current = visible.find(r => r.path === picked) ?? visible[0]
 
-    // One row: account, then each repo with its branch and actions, then refresh and close
+    const tab = (repo: RepoState) => {
+      const isCurrent = repo.path === current?.path
+      const mark = counts(repo)
+      return (
+        <Box key={`tab-${repo.path}`} flexDirection="row" alignItems="center" gap="xs">
+          <Button
+            key={`tab-button-${repo.path}`}
+            label={baseName(repo.path)}
+            plain
+            dimColor={!isCurrent}
+            hover={{ dimColor: false }}
+            onPress={() => update($, currentRepo, () => repo.path)}
+          />
+          {mark ? quiet(mark, repo.dirty ? DOT.warn : undefined) : null}
+        </Box>
+      )
+    }
+
+    // One quiet row: account and repo tabs on the left; the current repo's branch and
+    // actions, then refresh and close, on the right
     return (
       <Box key="band" flexDirection="row" alignItems="center" justifyContent="space-between" width="100%" paddingX="sm">
-        <Box key="who" flexDirection="row" alignItems="center" gap="sm">
-          {githubLogo}
-          <Text color={active ? DOT.active : DOT.idle}>●</Text>
-          {account}
+        <Box key="left" flexDirection="row" alignItems="center" gap="md">
+          <Box key="who" flexDirection="row" alignItems="center" gap="xs">
+            {githubLogo}
+            {account}
+          </Box>
+          {divider('left-divider')}
+          {visible.length
+            ? visible.map(tab)
+            : quiet(loading ? 'looking for repos…' : 'no git repo here')}
         </Box>
-        {visible.length
-          ? visible.map(repoGroup)
-          : text(loading ? 'looking for repos…' : 'no git repo here', undefined, true)}
-        <Box key="tools" flexDirection="row" alignItems="center" gap="sm">
+        <Box key="right" flexDirection="row" alignItems="center" gap="md">
+          {current ? (
+            <Box key="branch" flexDirection="row" alignItems="center" gap="sm">
+              {quiet('⎇')}
+              {hasPickers ? (
+                <table.Select
+                  key={`branch-${current.path}`}
+                  value={current.branch}
+                  options={(current.branches.includes(current.branch)
+                    ? current.branches
+                    : [current.branch, ...current.branches]
+                  ).map(b => ({ value: b }))}
+                  onSelect={b => switchBranch($, current, b)}
+                />
+              ) : (
+                quiet(shortName(current.branch))
+              )}
+              {iconAction(`fetch-${current.path}`, '⟳', 'fetch', () =>
+                gitAction($, current.path, ['fetch', '--all', '--prune'], 'fetched'),
+              )}
+              {iconAction(`pull-${current.path}`, '⇣', 'pull', () =>
+                gitAction($, current.path, ['pull', '--ff-only'], 'pulled'),
+              )}
+              {iconAction(`push-${current.path}`, '⇡', 'push', () => push($, current))}
+            </Box>
+          ) : null}
+          {current ? divider('right-divider') : null}
           {iconAction('refresh', '↻', 'refresh', () => refreshAll($))}
           {action('hide', '×', () => update($, isHidden, () => true))}
         </Box>

@@ -25,6 +25,8 @@ declare module 'claude-code' {
       repoStates: Record<string, RepoState>
       access: Access
       isLoading: boolean
+      // the repo tab picked by hand
+      currentRepo: string | null
     }
   }
 }
