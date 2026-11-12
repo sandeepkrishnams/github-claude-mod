@@ -2,10 +2,10 @@
 
 A Claude Code mod that puts your GitHub account and the project's repos in one quiet row right above the prompt box.
 
-- **Left**: the active `gh` account (`login ▾`; click to switch, accounts that can reach the project's repos listed first), then one tab per repo: the repo the session is in and every separate repo nested up to 3 folders down, with its counts in colour (`↑` ahead green, `↓` behind blue, `●` uncommitted yellow). The selected tab is marked `▸`.
-- **Right**, for the selected tab: the branch (`develop ▾`; click to pick one of the 4 most recent, or type any under Other; refuses to switch with uncommitted changes), `⇣` pull (fast-forward only), `⇡` push, `⟳` fetch & refresh, and `×` to hide the band. Hover a symbol to see its name.
+- **Left**: a dropdown of your signed-in `gh` accounts (picking one runs `gh auth switch`; `●` marks accounts that can reach the project's repos), then one tab per repo: the repo the session is in and every separate repo nested up to 3 folders down, with its counts in colour (`↑` ahead green, `↓` behind blue, `●` uncommitted yellow). The selected tab is marked `▸`.
+- **Right**, for the selected tab: a branch dropdown, most recent first (refuses to switch with uncommitted changes), `⇣` pull (fast-forward only), `⇡` push, `⟳` fetch & refresh, and `×` to hide the band. Hover a symbol to see its name.
 
-Pickers open Claude's own choice dialog. On opening a project it switches to the account you last picked there, or else to one that can push to its first GitHub repo. A repo the active account can't read is left out.
+On opening a project it switches to the account you last picked there, or else to one that can push to its first GitHub repo. A repo the active account can't read is left out.
 
 ## Install
 

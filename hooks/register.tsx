@@ -228,52 +228,6 @@ async function switchBranch($: EngineInterface, repo: RepoState, ref: string): P
   await gitAction($, repo.path, ['switch', name], `switched to ${name}`)
 }
 
-// The pickers are plain text buttons that open Claude's choice dialog: a dropdown
-// carries a background the band cannot take off. The dialog shows 2 to 4 choices
-// and "Other", where any name can be typed.
-async function pickAccount($: EngineInterface): Promise<void> {
-  const accounts = await read($, github)
-  const active = accounts.find(a => a.isActive)?.login
-  // Accounts that can reach the project's repos come first
-  const levels = await read($, access)
-  const reaches = (login: string) => Object.values(levels).some(l => l[login] !== undefined)
-  const others = accounts
-    .filter(a => !a.isActive)
-    .map(a => a.login)
-    .sort((x, y) => Number(reaches(y)) - Number(reaches(x)))
-  const choices = [...others, ...(active ? [active] : [])].slice(0, 4)
-  if (choices.length < 2) {
-    return
-  }
-  const login = await $.ui.ask('Switch to which GitHub account?', { header: 'Account', options: choices }).catch(
-    () => null,
-  )
-  if (login !== null && login !== active) {
-    await switchGithub($, login.trim(), true)
-  }
-}
-
-async function pickBranch($: EngineInterface, repo: RepoState): Promise<void> {
-  // Most recently committed first; a remote branch only when no local one shares its name
-  const local = new Set(repo.branches.filter(b => !repo.remoteNames.some(r => b.startsWith(`${r}/`))))
-  const choices = repo.branches
-    .filter(b => b !== repo.branch)
-    .filter(b => {
-      const remote = repo.remoteNames.find(r => b.startsWith(`${r}/`))
-      return remote === undefined || !local.has(b.slice(remote.length + 1))
-    })
-    .slice(0, 4)
-  if (choices.length < 2) {
-    choices.push(repo.branch)
-  }
-  const branch = await $.ui
-    .ask(`Switch ${baseName(repo.path)} to which branch?`, { header: 'Branch', options: choices })
-    .catch(() => null)
-  if (branch !== null) {
-    await switchBranch($, repo, branch.trim())
-  }
-}
-
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -362,14 +316,21 @@ export const register: Register = on => {
       ].filter(Boolean)
 
 
+    // The mobile app draws no Select: names stand in for the pickers there
+    const hasPickers = 'Select' in table
+    // Accounts that can reach the project's repos are marked ●
+    const reaches = (login: string) =>
+      visible.some(r => r.slugs[0] !== undefined && levels[r.slugs[0]]?.[login] !== undefined)
     const account =
-      accounts.length > 1 ? (
-        <Button
+      hasPickers && accounts.length > 1 ? (
+        <table.Select
           key="account"
-          label={`${shortName(active?.login ?? 'signed out')} ▾`}
-          plain
-          hover={{ color: DOT.active }}
-          onPress={() => pickAccount($)}
+          value={active?.login ?? ''}
+          options={accounts.map(a => ({
+            value: a.login,
+            label: `${a.login}${!a.isActive && reaches(a.login) ? ' ●' : ''}`,
+          }))}
+          onSelect={login => switchGithub($, login, true)}
         />
       ) : (
         quiet(shortName(active?.login ?? 'signed out'))
@@ -416,13 +377,19 @@ export const register: Register = on => {
           {current ? (
             <Box key="branch" flexDirection="row" alignItems="center" gap="xs">
               {quiet('⎇', HUE.branch)}
-              <Button
-                key={`branch-${current.path}`}
-                label={`${shortName(current.branch)} ▾`}
-                plain
-                hover={{ color: HUE.branch }}
-                onPress={() => pickBranch($, current)}
-              />
+              {hasPickers ? (
+                <table.Select
+                  key={`branch-${current.path}`}
+                  value={current.branch}
+                  options={(current.branches.includes(current.branch)
+                    ? current.branches
+                    : [current.branch, ...current.branches]
+                  ).map(b => ({ value: b }))}
+                  onSelect={b => switchBranch($, current, b)}
+                />
+              ) : (
+                quiet(shortName(current.branch))
+              )}
               {iconAction(`pull-${current.path}`, '⇣', 'pull', () =>
                 gitAction($, current.path, ['pull', '--ff-only'], 'pulled'), HUE.ahead,
               )}
