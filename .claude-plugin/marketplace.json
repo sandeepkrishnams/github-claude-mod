@@ -1,0 +1,5 @@
+{
+  "name": "github-claude-mod",
+  "owner": { "name": "sandeepkrishnams" },
+  "plugins": [{ "name": "accounts-band", "source": "./" }]
+}
