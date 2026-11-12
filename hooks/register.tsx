@@ -14,7 +14,7 @@ const RECONNECT_HINT =
 type Gh = { hosts: Record<string, { login: string; active: boolean }[]> }
 
 const GITHUB_LOGO =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#ffffff" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>'
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#8B949E" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>'
 
 // Zoho's four brand colours as tiles, standing in for its wordmark
 const ZOHO_COLORS = ['#E42527', '#089949', '#226DB4', '#F9B21D']
@@ -22,18 +22,13 @@ const ZOHO_LOGO = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 10">$
   (c, i) => `<rect x="${i * 9}" y="1" width="7" height="8" rx="1.5" fill="${c}"/>`,
 ).join('')}</svg>`
 
-// Translucent fills give the glass look; surfaces draw no blur
-const GLASS = {
-  band: 'rgba(255,255,255,0.04)',
-  chipBorder: 'rgba(255,255,255,0.16)',
-  tip: 'rgba(22,27,34,0.92)',
-} as const
+const TIP = { fill: '#161B22', border: '#30363D', text: '#E6EDF3' } as const
 
 const STATUS = {
-  active: { fill: 'rgba(46,160,67,0.18)', dot: '#3FB950' },
-  ok: { fill: 'rgba(46,160,67,0.18)', dot: '#3FB950' },
-  denied: { fill: 'rgba(248,81,73,0.16)', dot: '#F85149' },
-  unknown: { fill: 'rgba(255,255,255,0.07)', dot: '#8B949E' },
+  active: { dot: '#3FB950' },
+  ok: { dot: '#3FB950' },
+  denied: { dot: '#F85149' },
+  unknown: { dot: '#8B949E' },
 } as const
 
 // Names longer than this are cut, the full one shown on hover
@@ -110,17 +105,17 @@ export const register: Register = (on, options) => {
     const zohoStatus = await read($, zoho)
     const table = $.ui.resolve(e)
     const { Box, Button, Text } = table
-    const isGlass = 'Svg' in table
+    const hasSvg = 'Svg' in table
     const active = accounts.find(a => a.isActive)
     const zohoMark = { ok: '', denied: ' ✗', unknown: ' …' }[zohoStatus]
 
     // The terminal draws no Svg or translucency: glyphs and plain colours there
-    const githubLogo = isGlass ? (
+    const githubLogo = hasSvg ? (
       <table.Svg source={GITHUB_LOGO} alt="GitHub" width={11} height={11} />
     ) : (
       <Text bold>◉</Text>
     )
-    const zohoLogo = isGlass ? (
+    const zohoLogo = hasSvg ? (
       <table.Svg source={ZOHO_LOGO} alt="Zoho" width={18} height={6} />
     ) : (
       <Box>
@@ -133,19 +128,19 @@ export const register: Register = (on, options) => {
     )
 
     const tip = (text: string) =>
-      isGlass && text.length > MAX_NAME ? (
+      hasSvg && text.length > MAX_NAME ? (
         <Box
           position="absolute"
           top={-26}
           left={0}
           display="none"
           hover={{ display: 'flex' }}
-          backgroundColor={GLASS.tip}
+          backgroundColor={TIP.fill}
           borderStyle="round"
-          borderColor={GLASS.chipBorder}
+          borderColor={TIP.border}
           paddingX={1}
         >
-          <Text size="caption" mono>
+          <Text size="caption" mono color={TIP.text}>
             {text}
           </Text>
         </Box>
@@ -164,9 +159,6 @@ export const register: Register = (on, options) => {
         alignItems="center"
         gap="xs"
         paddingX="xs"
-        {...(isGlass
-          ? { backgroundColor: tone.fill }
-          : {})}
       >
         <Text color={tone.dot}>●</Text>
         {body ?? (
@@ -185,9 +177,6 @@ export const register: Register = (on, options) => {
         gap="xs"
         paddingX="xs"
         flexWrap="wrap"
-        {...(isGlass
-          ? { backgroundColor: GLASS.band }
-          : {})}
       >
         {githubLogo}
         {chip('gh-active', active ? STATUS.active : STATUS.unknown, active?.login ?? 'signed out')}
