@@ -2,6 +2,8 @@
 
 A Claude Code mod that puts the GitHub side of the project you're in right above the prompt box.
 
+Collapsed, it is one line: the active account, the repo and branch, ahead/behind/uncommitted counts and the PR's CI dot. `▸ more` opens one labelled line per topic below; `▾ less` folds it again.
+
 **Accounts**
 - The active `gh` account and a `⇄ <login>` button for each other one. A green dot marks accounts that can reach the repo.
 - On opening a project it switches to the account you last picked there, or else to one that can push to the repo.

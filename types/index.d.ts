@@ -41,6 +41,7 @@ declare module 'claude-code' {
       info: RepoState | null
       access: Access
       creating: Creating
+      isExpanded: boolean
     }
   }
 }

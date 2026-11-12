@@ -1,6 +1,6 @@
 {
   "name": "accounts-band",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "license": "MIT",
   "description": "GitHub band above the prompt: switch accounts, branches and worktrees, see PRs and CI for the project's repos",
   "types": "./types/index.d.ts"

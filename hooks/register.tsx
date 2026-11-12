@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Access, Ci, Creating, GhAccount, Pr, Remote, RepoState, Worktree } from '../types'
 
@@ -10,6 +10,7 @@ const selected = atom({ plugin: 'accounts-band', key: 'selected' } as const, nul
 const info = atom({ plugin: 'accounts-band', key: 'info' } as const, null as RepoState | null)
 const access = atom({ plugin: 'accounts-band', key: 'access' } as const, {} as Access)
 const creating = atom({ plugin: 'accounts-band', key: 'creating' } as const, null as Creating)
+const isExpanded = atom({ plugin: 'accounts-band', key: 'isExpanded' } as const, false)
 
 type Gh = { hosts: Record<string, { login: string; active: boolean }[]> }
 type Run = { ok: boolean; out: string; err: string }
@@ -18,14 +19,13 @@ type Check = { status?: string; conclusion?: string; state?: string }
 const GITHUB_LOGO =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#8B949E" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>'
 
-const TIP = { fill: '#161B22', border: '#30363D', text: '#E6EDF3' } as const
 const DOT = { active: '#3FB950', idle: '#8B949E', warn: '#D29922', fail: '#F85149' } as const
 const CI_DOT: Record<Ci, string> = { pass: DOT.active, fail: DOT.fail, running: DOT.warn, none: DOT.idle }
 const GITHUB_SLUG = /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?$/
 // Bash commands after which the GitHub side (PRs, CI) is worth fetching again
 const GITHUB_CHANGING = /\bgh\b|\bgit\s+(push|pull|fetch|switch|checkout|merge|rebase|worktree)\b/
 
-// Names longer than this are cut, the full one shown on hover
+// Names longer than this are cut in the collapsed row; the expanded one shows them whole
 const MAX_NAME = 18
 
 function shortName(name: string): string {
@@ -399,15 +399,18 @@ export const register: Register = on => {
     const accounts = await read($, github)
     const repo = await read($, info)
     const repoList = await read($, repos)
-    const canPush = await read($, access)
+    const levels = await read($, access)
     const pending = await read($, creating)
+    const expanded = await read($, isExpanded)
     const table = $.ui.resolve(e)
     const { Box, Button, Text } = table
     const hasSvg = 'Svg' in table
     const active = accounts.find(a => a.isActive)
     const mainSlug = repo?.remotes.find(r => r.slug !== null)?.slug ?? null
-    const levelFor = (login: string) => (mainSlug ? levelOf(canPush, mainSlug, login) : null)
+    const levelFor = (login: string) => (mainSlug ? levelOf(levels, mainSlug, login) : null)
     const activeLevel = active ? levelFor(active.login) : null
+    // A repo shows only to an account that can read it (or when it has no GitHub remote)
+    const shown = repo !== null && (mainSlug === null || activeLevel !== null) ? repo : null
 
     // The terminal draws no Svg: a glyph stands in for the logo there
     const githubLogo = hasSvg ? (
@@ -416,174 +419,199 @@ export const register: Register = on => {
       <Text bold>◉</Text>
     )
 
-    const tip = (text: string) =>
-      hasSvg && text.length > MAX_NAME ? (
-        <Box
-          position="absolute"
-          top={-26}
-          left={0}
-          display="none"
-          hover={{ display: 'flex' }}
-          backgroundColor={TIP.fill}
-          borderStyle="round"
-          borderColor={TIP.border}
-          paddingX={1}
-        >
-          <Text size="caption" mono color={TIP.text}>
-            {text}
-          </Text>
-        </Box>
-      ) : null
-
-    const label = (text: string, color?: string) => (
-      <Text size="caption" mono color={color} dimColor={color === undefined}>
-        {text}
+    const text = (value: string, color?: string, isDim = false) => (
+      <Text size="caption" mono color={color} dimColor={isDim}>
+        {value}
       </Text>
     )
+    const dot = (color: string) => <Text color={color}>●</Text>
+    const action = (key: string, value: string, onPress: () => unknown) => (
+      <Button key={key} label={value} plain dimColor hover={{ dimColor: false }} onPress={onPress} />
+    )
+    const hideButton = action('hide', '×', () => update($, isHidden, () => true))
+    const toggle = action('toggle', expanded ? '▾ less' : '▸ more', () =>
+      update($, isExpanded, value => !value),
+    )
 
-    const chip = (
-      key: string,
-      dot: string,
-      text: string,
-      body: ReturnType<typeof Text> | null = null,
-    ) => (
-      <Box key={key} position="relative" flexDirection="row" alignItems="center" gap="xs" paddingX="xs">
-        <Text color={dot}>●</Text>
-        {body ?? (
-          <Text size="caption" mono weight="medium">
-            {shortName(text)}
-          </Text>
-        )}
-        {tip(text)}
+    const ci = shown?.pr?.ci ?? shown?.branchCi ?? 'none'
+    const summary = shown
+      ? [
+          shown.ahead ? `↑${shown.ahead}` : '',
+          shown.behind ? `↓${shown.behind}` : '',
+          shown.dirty ? `●${shown.dirty}` : '',
+        ]
+          .filter(Boolean)
+          .join(' ')
+      : ''
+
+    // Collapsed: who you are, where you are, and whether anything needs a look
+    const headline = (
+      <Box key="headline" flexDirection="row" alignItems="center" justifyContent="space-between" width="100%">
+        <Box flexDirection="row" alignItems="center" gap="sm">
+          {githubLogo}
+          {dot(active ? DOT.active : DOT.idle)}
+          {text(shortName(active?.login ?? 'signed out'))}
+        </Box>
+        {shown ? (
+          <Box flexDirection="row" alignItems="center" gap="sm">
+            {text(baseName(shown.path), undefined, true)}
+            {text(`⎇ ${shortName(shown.branch)}`)}
+            {summary ? text(summary, shown.dirty ? DOT.warn : undefined, !shown.dirty) : null}
+          </Box>
+        ) : null}
+        {shown?.pr ? (
+          <Box flexDirection="row" alignItems="center" gap="xs">
+            {dot(CI_DOT[ci])}
+            {text(`PR #${shown.pr.number}`)}
+          </Box>
+        ) : null}
+        <Box flexDirection="row" alignItems="center" gap="sm">
+          {toggle}
+          {hideButton}
+        </Box>
       </Box>
     )
 
-    const accountRow = (
-      <Box key="accounts" flexDirection="row" alignItems="center" gap="sm">
-        {githubLogo}
-        {chip(
-          'gh-active',
-          active ? DOT.active : DOT.idle,
-          `${active?.login ?? 'signed out'}${activeLevel === 'read' ? ' (read only)' : ''}`,
-        )}
-        {accounts
-          .filter(a => !a.isActive)
-          .map(a =>
-            chip(
-              `gh-${a.login}`,
-              levelFor(a.login) ? DOT.active : DOT.idle,
-              a.login,
-              <Button
-                key={`sw-${a.login}`}
-                label={`⇄ ${shortName(a.login)}`}
-                plain
-                dimColor
-                hover={{ dimColor: false }}
-                onPress={() => switchGithub($, a.login, repo?.path ?? null)}
-              />,
-            ),
-          )}
+    if (!expanded || !('Select' in table)) {
+      return headline
+    }
+
+    // Expanded: one labelled line per topic, the label column lined up
+    const { Input, Select } = table
+    const section = (key: string, title: string, children: RenderChildren[]) => (
+      <Box key={key} flexDirection="row" alignItems="center" gap="md" width="100%">
+        {text(title.padEnd(9), undefined, true)}
+        <Box flexDirection="row" alignItems="center" gap="md" flexGrow={1}>
+          {children}
+        </Box>
       </Box>
     )
 
-    // The account row alone: outside a repo, on a GitHub repo the active account cannot
-    // read, and in the mobile app, which draws no Select or Input
-    if (repo === null || (mainSlug !== null && activeLevel === null) || !('Select' in table)) {
+    const others = accounts.filter(a => !a.isActive)
+    const accountLine = section(
+      'accounts',
+      'Account',
+      [
+        text(`${active?.login ?? 'signed out'}${activeLevel === 'read' ? ' (read only)' : ''}`),
+        ...others.map(a =>
+          action(
+            `sw-${a.login}`,
+            `⇄ ${shortName(a.login)}${levelFor(a.login) ? ' ●' : ''}`,
+            () => switchGithub($, a.login, shown?.path ?? null),
+          ),
+        ),
+      ],
+    )
+
+    if (shown === null) {
       return (
-        <Box flexDirection="row" alignItems="center" justifyContent="space-between" width="100%" paddingX="sm">
-          {accountRow}
-          <Button key="hide" label="×" plain dimColor onPress={() => update($, isHidden, () => true)} />
+        <Box flexDirection="column" width="100%" gap="xs">
+          {headline}
+          {accountLine}
         </Box>
       )
     }
 
-    const { Input, Select } = table
-    const prText = repo.pr
-      ? `#${repo.pr.number} ${repo.pr.isDraft ? 'draft' : repo.pr.state.toLowerCase()}${repo.pr.review ? ` · ${repo.pr.review.toLowerCase().replace(/_/g, ' ')}` : ''}`
-      : 'no PR'
-    const ci = repo.pr?.ci ?? repo.branchCi
+    const createLine =
+      pending !== null
+        ? section('create', pending === 'branch' ? 'New branch' : 'New tree', [
+            <Input
+              key="create-name"
+              placeholder={pending === 'branch' ? 'branch name' : 'branch for the new worktree'}
+              submitLabel="Create"
+              autoFocus
+              onSubmit={name => createFromInput($, pending, name)}
+            />,
+            action('cancel', 'cancel', () => update($, creating, () => null)),
+          ])
+        : null
+
+    const prLine = mainSlug
+      ? section('pr', 'Pull req', [
+          shown.pr ? (
+            <Box key="pr-chip" flexDirection="row" alignItems="center" gap="xs">
+              {dot(CI_DOT[ci])}
+              {text(
+                `#${shown.pr.number} ${shown.pr.isDraft ? 'draft' : shown.pr.state.toLowerCase()}${
+                  shown.pr.review ? ` · ${shown.pr.review.toLowerCase().replace(/_/g, ' ')}` : ''
+                }${ci === 'none' ? '' : ` · CI ${ci}`}`,
+              )}
+            </Box>
+          ) : (
+            text(`no PR for this branch${ci === 'none' ? '' : ` · CI ${ci}`}`, undefined, true)
+          ),
+          text(`${shown.openPrs} open · ${shown.reviewPrs} to review`, undefined, true),
+          <Select
+            key="open"
+            label="↗ open"
+            value="repo"
+            options={[
+              { value: 'repo', label: 'repo' },
+              { value: 'branch', label: 'branch' },
+              ...(shown.pr ? [{ value: 'pr', label: `PR #${shown.pr.number}` }] : []),
+            ]}
+            onSelect={target => browse($, target)}
+          />,
+        ])
+      : null
 
     return (
-      <Box flexDirection="column" width="100%" paddingX="sm" gap="xs">
-        <Box flexDirection="row" alignItems="center" justifyContent="space-between" width="100%">
-          {repoList.length > 1 ? (
-            <Select
-              key="repo"
-              label="repo"
-              value={repo.path}
-              options={repoList.map(p => ({ value: p, label: baseName(p) }))}
-              onSelect={p => selectRepo($, p)}
-            />
-          ) : (
-            label(baseName(repo.path))
-          )}
+      <Box flexDirection="column" width="100%" gap="xs">
+        {headline}
+        {accountLine}
+        {repoList.length > 1
+          ? section('repo', 'Repo', [
+              <Select
+                key="repo"
+                value={shown.path}
+                options={repoList.map(p => ({ value: p, label: baseName(p) }))}
+                onSelect={p => selectRepo($, p)}
+              />,
+            ])
+          : null}
+        {section('branch', 'Branch', [
           <Select
             key="branch"
-            label="⎇"
-            value={repo.branch}
-            options={(repo.branches.includes(repo.branch) ? repo.branches : [repo.branch, ...repo.branches]).map(b => ({
-              value: b,
-            }))}
+            value={shown.branch}
+            options={(shown.branches.includes(shown.branch) ? shown.branches : [shown.branch, ...shown.branches]).map(
+              b => ({ value: b }),
+            )}
             onSelect={b => switchBranch($, b)}
-          />
-          {label(
-            `↑${repo.ahead} ↓${repo.behind}${repo.dirty ? ` ●${repo.dirty}` : ''}`,
-            repo.dirty ? DOT.warn : undefined,
-          )}
-          {repo.worktrees.length > 1 ? (
+          />,
+          text(`↑${shown.ahead} ↓${shown.behind} · ${shown.dirty} changed`, undefined, true),
+          action('fetch', '⟳ fetch', () => gitAction($, ['fetch', '--all', '--prune'], 'Fetched')),
+          action('pull', '⇣ pull', () => gitAction($, ['pull', '--ff-only'], 'Pulled')),
+          action('new-branch', '+ new', () => update($, creating, () => 'branch')),
+        ])}
+        {section('worktree', 'Worktree', [
+          shown.worktrees.length > 1 ? (
             <Select
               key="worktree"
-              label="worktree"
-              value={repo.path}
-              options={repo.worktrees.map(w => ({ value: w.path, label: `${baseName(w.path)} (${w.branch})` }))}
+              value={shown.path}
+              options={shown.worktrees.map(w => ({ value: w.path, label: `${baseName(w.path)} (${w.branch})` }))}
               onSelect={p => openWorktree($, p)}
             />
-          ) : null}
-          {repo.remotes.map(r =>
-            label(
-              `${r.name}${r.slug ? `: ${r.slug}${active && levelOf(canPush, r.slug, active.login) === 'push' ? ' ✓' : ' ✗'}` : ''}`,
-            ),
-          )}
-          {pending === null ? (
-            <Box key="actions" flexDirection="row" gap="sm">
-              <Button key="fetch" label="⟳ fetch" plain dimColor onPress={() => gitAction($, ['fetch', '--all', '--prune'], 'Fetched')} />
-              <Button key="pull" label="⇣ pull" plain dimColor onPress={() => gitAction($, ['pull', '--ff-only'], 'Pulled')} />
-              <Button key="new-branch" label="+ branch" plain dimColor onPress={() => update($, creating, () => 'branch')} />
-              <Button key="new-worktree" label="+ worktree" plain dimColor onPress={() => update($, creating, () => 'worktree')} />
-            </Box>
           ) : (
-            <Box key="create" flexDirection="row" gap="sm" alignItems="center">
-              <Input
-                key="create-name"
-                placeholder={pending === 'branch' ? 'new branch name' : 'new worktree branch'}
-                submitLabel="Create"
-                autoFocus
-                onSubmit={name => createFromInput($, pending, name)}
-              />
-              <Button key="cancel" label="cancel" plain dimColor onPress={() => update($, creating, () => null)} />
-            </Box>
-          )}
-        </Box>
-        <Box flexDirection="row" alignItems="center" justifyContent="space-between" width="100%">
-          {accountRow}
-          {mainSlug ? chip('pr', CI_DOT[ci], `${prText}${ci === 'none' ? '' : ` · CI ${ci}`}`) : null}
-          {mainSlug ? label(`PRs ${repo.openPrs} · review ${repo.reviewPrs}`) : null}
-          {mainSlug ? (
-            <Select
-              key="open"
-              label="↗"
-              value="repo"
-              options={[
-                { value: 'repo', label: 'repo' },
-                { value: 'branch', label: 'branch' },
-                ...(repo.pr ? [{ value: 'pr', label: `PR #${repo.pr.number}` }] : []),
-              ]}
-              onSelect={target => browse($, target)}
-            />
-          ) : null}
-          <Button key="refresh" label="↻" plain dimColor onPress={() => refreshAll($)} />
-          <Button key="hide" label="×" plain dimColor onPress={() => update($, isHidden, () => true)} />
-        </Box>
+            text('only this one', undefined, true)
+          ),
+          action('new-worktree', '+ new', () => update($, creating, () => 'worktree')),
+        ])}
+        {createLine}
+        {shown.remotes.length
+          ? section(
+              'remotes',
+              'Remotes',
+              shown.remotes.map(r =>
+                text(
+                  `${r.name} ${r.slug ?? ''}${
+                    r.slug && active && levelOf(levels, r.slug, active.login) === 'push' ? ' ✓' : r.slug ? ' ✗' : ''
+                  }`,
+                ),
+              ),
+            )
+          : null}
+        {prLine}
+        {section('refresh', '', [action('refresh', '↻ refresh', () => refreshAll($))])}
       </Box>
     )
   })
