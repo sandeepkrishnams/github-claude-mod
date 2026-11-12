@@ -13,6 +13,23 @@ const RECONNECT_HINT =
 
 type Gh = { hosts: Record<string, { login: string; active: boolean }[]> }
 
+const GITHUB_LOGO =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#ffffff" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>'
+
+// Zoho's four brand colours as tiles, standing in for its wordmark
+const ZOHO_COLORS = ['#E42527', '#089949', '#226DB4', '#F9B21D']
+const ZOHO_LOGO = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 10">${ZOHO_COLORS.map(
+  (c, i) => `<rect x="${i * 9}" y="1" width="7" height="8" rx="1.5" fill="${c}"/>`,
+).join('')}</svg>`
+
+const CHIP = {
+  github: '#24292F',
+  active: '#1F883D',
+  ok: '#1F883D',
+  denied: '#CF222E',
+  unknown: '#6E7781',
+} as const
+
 async function loadGithub($: EngineInterface): Promise<void> {
   const { exitCode, stdout } = await $.process.run(['gh', 'auth', 'status', '--json', 'hosts'])
   const accounts =
@@ -78,26 +95,65 @@ export const register: Register = (on, options) => {
 
     const accounts = await read($, github)
     const zohoStatus = await read($, zoho)
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const table = $.ui.resolve(e)
+    const { Box, Button, Text } = table
     const active = accounts.find(a => a.isActive)
     const zohoMark = { ok: '✓', denied: '✗ no access', unknown: '…' }[zohoStatus]
 
+    // The terminal has no Svg: it gets coloured glyphs in place of the logos
+    const githubLogo =
+      'Svg' in table ? (
+        <table.Svg source={GITHUB_LOGO} alt="GitHub" width={14} height={14} />
+      ) : (
+        <Text color="#FFFFFF" bold>
+          ◉
+        </Text>
+      )
+    const zohoLogo =
+      'Svg' in table ? (
+        <table.Svg source={ZOHO_LOGO} alt="Zoho" width={30} height={10} />
+      ) : (
+        <Box>
+          {ZOHO_COLORS.map(c => (
+            <Text key={c} color={c}>
+              ■
+            </Text>
+          ))}
+        </Box>
+      )
+
     return (
-      <Box>
-        <Text dimColor>GitHub: </Text>
-        <Text bold>{active?.login ?? 'not signed in'} </Text>
+      <Box flexDirection="row" alignItems="center" gap={1} flexWrap="wrap">
+        <Box backgroundColor={CHIP.github} paddingX={1} gap={1} alignItems="center">
+          {githubLogo}
+          <Text color="#FFFFFF" bold>
+            GitHub
+          </Text>
+        </Box>
+        <Box backgroundColor={active ? CHIP.active : CHIP.unknown} paddingX={1}>
+          <Text color="#FFFFFF" bold>
+            ● {active?.login ?? 'not signed in'}
+          </Text>
+        </Box>
         {accounts
           .filter(a => !a.isActive)
           .map(a => (
             <Button
               key={`gh-${a.login}`}
-              label={`↔ ${a.login}`}
+              label={`⇄ ${a.login}`}
+              variant="secondary"
               onPress={() => switchGithub($, a.login)}
             />
           ))}
-        <Text dimColor> · Zoho: </Text>
-        <Button key="zoho" label={`${zohoName} ${zohoMark}`} onPress={() => recheckZoho($, teamId)} />
-        <Button key="hide" label="Hide" onPress={() => update($, isHidden, () => true)} />
+        <Text dimColor>│</Text>
+        {zohoLogo}
+        <Box backgroundColor={CHIP[zohoStatus]} paddingX={1}>
+          <Text color="#FFFFFF" bold>
+            {zohoName} {zohoMark}
+          </Text>
+        </Box>
+        <Button key="zoho" label="↻" variant="secondary" onPress={() => recheckZoho($, teamId)} />
+        <Button key="hide" label="Hide" plain dimColor onPress={() => update($, isHidden, () => true)} />
       </Box>
     )
   })
